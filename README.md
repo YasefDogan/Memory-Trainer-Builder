@@ -1,5 +1,5 @@
 # C#-based memory reading and writing tool
- This project focuses on developing a C#-based application inspired by Cheat Engine to understand and demonstrate process memory manipulation techniques. Throughout the project, the working principles of memory management, including reading and writing data from a running process, were explored in detail. The application was designed to interact with system memory safely and efficiently, providing insight into how values are stored, accessed, and modified in real time. Additionally, the project helped improve understanding of low-level system operations, API usage, and the interaction between software and operating system memory. This implementation served as an educational tool to strengthen knowledge of memory structures, data flow, and software architecture.
+ This project focuses on developing a C#-based application inspired by cheat engine.exe to understand and demonstrate process memory manipulation techniques. Throughout the project, the working principles of memory management, including reading and writing data from a running process, were explored in detail. The application was designed to interact with system memory safely and efficiently, providing insight into how values are stored, accessed, and modified in real time. Additionally, the project helped improve understanding of low-level system operations, API usage, and the interaction between software and operating system memory. This implementation served as an educational tool to strengthen knowledge of memory structures, data flow, and software architecture.
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -21,7 +21,7 @@ Windows oyunları için geliştirilmiş profesyonel bellek düzenleme aracı. Te
 
 **[⬇️ En Son Sürümü İndir (Releases)](https://github.com/YasefDogan/Memory-Trainer-Builder/releases/tag/memTrainer)**
 
-> Zip dosyasını indirip çıkarın, `MemoryScanner.exe` dosyasını çalıştırın. Kurulum gerektirmez!
+> Zip dosyasını indirip çıkarın, `cheat engine.exe` dosyasını çalıştırın. Kurulum gerektirmez!
 
 ---
 
@@ -31,7 +31,7 @@ Windows oyunları için geliştirilmiş profesyonel bellek düzenleme aracı. Te
 
 1. [Releases sayfasından]((https://github.com/YasefDogan/Memory-Trainer-Builder/releases/tag/memTrainer)) son sürümü indirin
 2. Zip'i çıkarın
-3. `MemoryScanner.exe` dosyasını çalıştırın
+3. `cheat engine.exe` dosyasını çalıştırın
 4. **Yönetici olarak çalıştırın** (bazı oyunlar için gerekli)
 
 ### Seçenek 2: Kaynak Koddan
@@ -288,7 +288,7 @@ git push origin feature/amazing-feature
 
 ## 🙏 Teşekkürler
 
-- [Cheat Engine](https://www.cheatengine.org/) - İlham kaynağı
+- [cheat engine.exe](https://www.cheatengine.org/) - İlham kaynağı
 - .NET Framework ekibi
 
 ---
