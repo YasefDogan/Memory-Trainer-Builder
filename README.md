@@ -77,8 +77,8 @@ Backend projesi ayrı repository'de:
 
 ### 1️⃣ Process Seçimi
 
-![Process Selection](<img width="701" height="575" alt="image" src="https://github.com/user-attachments/assets/29cd6113-7500-432b-881b-90f2fd074f06" />
-)
+![Process Selection]
+<img width="701" height="575" alt="image" src="https://github.com/user-attachments/assets/17169ad3-5a25-4e19-98ec-080be49151b1" />
 
 1. **Oyunu başlatın** (örn: Witcher 3, Euro Truck Sim 2)
 2. Memory Scanner'ı açın
@@ -89,7 +89,7 @@ Backend projesi ayrı repository'de:
 
 ### 2️⃣ İlk Tarama (First Scan)
 
-![First Scan](docs/step2.png)
+![First Scan]
 
 **Senaryo:** witcherda'da 1234567 param var, bunu bulmak istiyoruz.
 <img width="696" height="335" alt="image" src="https://github.com/user-attachments/assets/d2c7ca07-c557-42ac-8182-05101601b760" />
