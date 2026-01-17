@@ -282,7 +282,7 @@ git push origin feature/amazing-feature
 
 **YasefDogan**
 
-- GitHub: [@yasefdogan(https://github.com/YasefDogan)]
+- GitHub: [@YasefDogan](https://github.com/YasefDogan)
 
 ---
 
