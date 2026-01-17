@@ -8,7 +8,6 @@
 
 Windows oyunları için geliştirilmiş profesyonel bellek düzenleme aracı. Tek oyunculu oyunlarda bellek değerlerini (can, para, puan vb.) bulup değiştirmenizi sağlar.
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)]()
 [![.NET](https://img.shields.io/badge/.NET-Framework%204.7.2-purple.svg)]()
 
