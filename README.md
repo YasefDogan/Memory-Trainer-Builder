@@ -77,7 +77,6 @@ Backend projesi ayrı repository'de:
 
 ### 1️⃣ Process Seçimi
 
-![Process Selection]
 <img width="701" height="575" alt="image" src="https://github.com/user-attachments/assets/17169ad3-5a25-4e19-98ec-080be49151b1" />
 
 1. **Oyunu başlatın** (örn: Witcher 3, Euro Truck Sim 2)
@@ -89,7 +88,7 @@ Backend projesi ayrı repository'de:
 
 ### 2️⃣ İlk Tarama (First Scan)
 
-![First Scan]
+
 
 **Senaryo:** witcherda'da 1234567 param var, bunu bulmak istiyoruz.
 <img width="696" height="335" alt="image" src="https://github.com/user-attachments/assets/d2c7ca07-c557-42ac-8182-05101601b760" />
@@ -110,8 +109,6 @@ Backend projesi ayrı repository'de:
 ---
 
 ### 3️⃣ Tekrar Tarama (Rescan)
-
-![Rescan](docs/step3.png)
 
 **Amaç:** Yanlış adresleri elemek.
 
@@ -134,8 +131,8 @@ Backend projesi ayrı repository'de:
 
 ### 4️⃣ Değer Değiştirme (Write)
 
-![Write Value](<img width="723" height="590" alt="image" src="https://github.com/user-attachments/assets/805a6528-23c4-4e99-944f-2cc1c04c44c6" />
-)
+<img width="723" height="590" alt="image" src="https://github.com/user-attachments/assets/805a6528-23c4-4e99-944f-2cc1c04c44c6" />
+
 
 1. Doğru adresi bulduktan sonra
 2. **Yazılacak Değer** alanına yeni değeri girin: `161616`
@@ -147,8 +144,8 @@ Backend projesi ayrı repository'de:
 
 ### 4️.1 Adresleri Kaydetme
 
-![Export](<img width="693" height="576" alt="image" src="https://github.com/user-attachments/assets/aa7b5399-797c-46c9-a628-65c6354eefae" />
-)
+<img width="693" height="576" alt="image" src="https://github.com/user-attachments/assets/aa7b5399-797c-46c9-a628-65c6354eefae" />
+
 
 
 1. **Dışa Aktar** butonuna basın
@@ -164,7 +161,7 @@ Backend projesi ayrı repository'de:
 3. **Yükle** butonuna basın
 4. Her adres için **Oku** / **Yaz** butonlarını kullanın
 
-![Import](<img width="671" height="554" alt="image" src="https://github.com/user-attachments/assets/f8d76b4d-75d8-4ed9-b09b-61d8a0724001" />
+(<img width="671" height="554" alt="image" src="https://github.com/user-attachments/assets/f8d76b4d-75d8-4ed9-b09b-61d8a0724001" />
 )
 
 ---
