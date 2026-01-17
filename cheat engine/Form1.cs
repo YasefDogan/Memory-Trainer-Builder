@@ -1,0 +1,959 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Runtime.CompilerServices;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.IO;
+using System.Net.Http;
+using cheat_engine.Interfaces;
+using cheat_engine.Services;
+
+namespace cheat_engine
+{
+    public partial class Form1 : Form, ILogger
+    {
+        private List<FoundAddress> lastFoundAddresses = new List<FoundAddress>();
+        private string lastSearchType = "Int";
+
+        // --- Interface-based services ---
+        private readonly IMemoryScanner _memoryScanner;
+        private readonly IMemoryWriter _memoryWriter;
+        private readonly IProcessManager _processManager;
+        private readonly IAddressFileManager _addressFileManager;
+        private readonly IValueConverter _valueConverter;
+        // --------------------------------
+
+        // --- HTTP Client for API calls ---
+        private static readonly HttpClient _httpClient = new HttpClient(new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true // -k flag equivalent
+        });
+        // ---------------------------------
+
+        // --- New fields for batched UI updates ---
+        private readonly ConcurrentQueue<string> _logQueue = new ConcurrentQueue<string>();
+        private readonly ConcurrentQueue<string> _resultQueue = new ConcurrentQueue<string>();
+        private volatile string _latestStatus = null;
+        private volatile bool _clearResultsRequested = false;
+        private readonly System.Windows.Forms.Timer _uiFlushTimer;
+        // ------------------------------------------
+
+        public Form1()
+        {
+            InitializeComponent();
+            this.Text = "YasefDogan-cheat engine C# recration";
+
+            // Initialize services with dependency injection
+            _valueConverter = new ValueConverter();
+            _processManager = new ProcessManager();
+            _memoryScanner = new MemoryScanner(_processManager, _valueConverter, this);
+            _memoryWriter = new MemoryWriter(_processManager, _valueConverter, this);
+            _addressFileManager = new AddressFileManager(_valueConverter, this);
+
+            // Load and set the application icon
+            try
+            {
+                // Farklı olası yolları dene
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string[] possiblePaths = new[]
+                {
+                    Path.Combine(baseDir, "cheat logo.png"),
+                    Path.Combine(baseDir, @"..\..\..\cheat logo.png"), // Debug klasöründen proje köküne
+                    Path.Combine(baseDir, @"..\..\cheat logo.png"),
+                    @"C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\cheat logo.png"
+                };
+                
+                string pngPath = null;
+                foreach (var p in possiblePaths)
+                {
+                    if (File.Exists(p))
+                    {
+                        pngPath = p;
+                        break;
+                    }
+                }
+                
+                if (pngPath != null)
+                {
+                    using (var originalBmp = new System.Drawing.Bitmap(pngPath))
+                    {
+                        // Dikdörtgen görüntüden ortadaki 140x140 kare kısmı kırp
+                        int targetSize = 140;
+                        int sourceSize = Math.Min(originalBmp.Width, originalBmp.Height); // 140 (en küçük boyut)
+                        
+                        // Orijinal görüntüden kırpma için merkez hesapla
+                        int x = (originalBmp.Width - sourceSize) / 2;  // Yatayda ortala
+                        int y = (originalBmp.Height - sourceSize) / 2; // Dikeyde ortala (zaten 0 olacak)
+                        
+                        // Kare bölgeyi kırp
+                        var cropRect = new System.Drawing.Rectangle(x, y, sourceSize, sourceSize);
+                        
+                        using (var croppedBmp = originalBmp.Clone(cropRect, originalBmp.PixelFormat))
+                        {
+                            // Yüksek kaliteli resize için yeni bitmap oluştur
+                            using (var iconBmp = new System.Drawing.Bitmap(targetSize, targetSize))
+                            {
+                                using (var g = System.Drawing.Graphics.FromImage(iconBmp))
+                                {
+                                    g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                    g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                                    g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                                    g.DrawImage(croppedBmp, 0, 0, targetSize, targetSize);
+                                }
+                                
+                                IntPtr hIcon = iconBmp.GetHicon();
+                                this.Icon = System.Drawing.Icon.FromHandle(hIcon);
+                            }
+                        }
+                    }
+                    Debug.WriteLine($"Icon yüklendi: {pngPath}");
+                }
+                else
+                {
+                    Debug.WriteLine("Logo dosyası bulunamadı!");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Icon yükleme hatası - log'a yazdır
+                Debug.WriteLine($"Icon yükleme hatası: {ex.Message}");
+            }
+
+            // Setup UI flush timer to batch updates and avoid flooding the STA thread
+            _uiFlushTimer = new System.Windows.Forms.Timer();
+            _uiFlushTimer.Interval = 150; // ms - tune as needed
+            _uiFlushTimer.Tick += (s, e) => FlushUiQueues();
+            _uiFlushTimer.Start();
+            
+            // Apply dark theme
+            ApplyDarkTheme();
+        }
+
+        private void ApplyDarkTheme()
+        {
+            // Ana form renkleri
+            this.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            this.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+
+            // TabControl
+            tabControlMain.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+            
+            // Tarama sekmesi
+            tabScan.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+            ApplyDarkThemeToControls(tabScan);
+            
+            // İçe Aktar sekmesi
+            tabUpload.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+            ApplyDarkThemeToControls(tabUpload);
+            
+            // Özel renkler
+            lstResults.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            lstResults.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+            
+            txtLog.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            txtLog.ForeColor = System.Drawing.Color.FromArgb(180, 180, 180);
+            
+            txtLogUpload.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            txtLogUpload.ForeColor = System.Drawing.Color.FromArgb(180, 180, 180);
+            
+            progressBarScan.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+            progressBarScan.ForeColor = System.Drawing.Color.FromArgb(0, 122, 204);
+            
+            flpAddressesUpload.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+        }
+
+        private void ApplyDarkThemeToControls(System.Windows.Forms.Control parent)
+        {
+            foreach (System.Windows.Forms.Control ctrl in parent.Controls)
+            {
+                if (ctrl is System.Windows.Forms.Button)
+                {
+                    var btn = (System.Windows.Forms.Button)ctrl;
+                    btn.BackColor = System.Drawing.Color.FromArgb(62, 62, 64);
+                    btn.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                    btn.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                    btn.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(80, 80, 80);
+                }
+                else if (ctrl is System.Windows.Forms.TextBox)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(51, 51, 55);
+                    ctrl.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                }
+                else if (ctrl is System.Windows.Forms.ComboBox)
+                {
+                    var cb = (System.Windows.Forms.ComboBox)ctrl;
+                    cb.BackColor = System.Drawing.Color.FromArgb(51, 51, 55);
+                    cb.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                    cb.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                }
+                else if (ctrl is System.Windows.Forms.Label)
+                {
+                    ctrl.BackColor = System.Drawing.Color.Transparent;
+                    ctrl.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                }
+                else if (ctrl is System.Windows.Forms.ListBox)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+                    ctrl.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                }
+                else if (ctrl is System.Windows.Forms.FlowLayoutPanel)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+                    ApplyDarkThemeToControls(ctrl);
+                }
+                else if (ctrl is System.Windows.Forms.Panel)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+                    ApplyDarkThemeToControls(ctrl);
+                }
+            }
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+            RefreshProcessListUpload();
+            LoadUploadedFiles();
+        }
+
+        private void RefreshProcessList()
+        {
+            try
+            {
+                cbProcesses.Items.Clear();
+                var processes = _processManager.GetProcessList();
+                foreach (var p in processes)
+                {
+                    try { cbProcesses.Items.Add(new ProcessItem { Process = p.Process, Display = p.ToString() }); }
+                    catch { }
+                }
+                if (cbProcesses.Items.Count > 0) cbProcesses.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Refresh hata: " + ex.Message);
+            }
+        }
+
+        private void RefreshProcessListUpload()
+        {
+            try
+            {
+                cbProcessesUpload.Items.Clear();
+                var processes = _processManager.GetProcessList();
+                foreach (var p in processes)
+                {
+                    try { cbProcessesUpload.Items.Add(new ProcessItem { Process = p.Process, Display = p.ToString() }); }
+                    catch { }
+                }
+                if (cbProcessesUpload.Items.Count > 0) cbProcessesUpload.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Refresh hata: " + ex.Message);
+            }
+        }
+
+        private void btnRefresh_Click(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+        }
+
+        private void btnRefreshUpload_Click(object sender, EventArgs e)
+        {
+            RefreshProcessListUpload();
+        }
+
+        private async void btnScan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (string.IsNullOrWhiteSpace(txtValue.Text)) { MessageBox.Show("Lütfen aranacak değeri girin."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string searchType = cbType.SelectedItem?.ToString() ?? "Int";
+            string searchValue = txtValue.Text;
+
+            lstResults.Items.Clear();
+            lastFoundAddresses.Clear();
+            lastSearchType = searchType;
+            
+            // Progress bar'ı sıfırla
+            progressBarScan.Value = 0;
+            progressBarScan.Maximum = 100;
+            
+            SetStatus("Tarama başlıyor...");
+
+            var targets = _valueConverter.BuildTargets(searchType, searchValue, out string buildErr);
+            if (buildErr != null) { SetStatus(buildErr); return; }
+
+            var progress = new Progress<int>(percent => 
+            {
+                if (progressBarScan != null && !progressBarScan.IsDisposed)
+                    progressBarScan.Value = Math.Min(percent, 100);
+            });
+
+            var foundAddresses = await Task.Run(() => _memoryScanner.ScanMemory(process, targets, progress));
+
+            // Update UI with results
+            lastFoundAddresses = foundAddresses;
+            foreach (var fa in foundAddresses)
+            {
+                AddResult($"0x{fa.Address.ToString("X")} | {fa.Subtype} | {_valueConverter.FormatBytesAsDisplay(fa.Subtype, fa.Value)}");
+            }
+
+            progressBarScan.Value = 100;
+            SetStatus("Tamamlandı");
+        }
+
+        private async void btnRescan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string newValue = txtValue.Text;
+
+            SetStatus("Tekrar taranıyor...");
+
+            var remaining = await Task.Run(() => _memoryScanner.RescanAddresses(process, lastFoundAddresses.ToList(), newValue));
+
+            // Update UI
+            ClearResults();
+            lastFoundAddresses = remaining;
+            foreach (var fa in remaining)
+            {
+                AddResult($"0x{fa.Address.ToString("X")} | {fa.Subtype} | {_valueConverter.FormatBytesAsDisplay(fa.Subtype, fa.Value)}");
+            }
+
+            SetStatus("Tekrar tarama tamamlandı");
+        }
+
+        private async void btnWrite_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string writeType = cbType.SelectedItem?.ToString() ?? "Int";
+            string writeValue = txtWriteValue.Text;
+
+            SetStatus("Belleğe yazma başlıyor...");
+            byte[] data;
+            if (writeType == "Int")
+            {
+                if (!_valueConverter.GetBytesForType("Int32", writeValue, out data, out string err)) { SetStatus(err); return; }
+            }
+            else
+            {
+                if (!_valueConverter.GetBytesForType(writeType, writeValue, out data, out string err)) { SetStatus(err); return; }
+            }
+
+            var results = await Task.Run(() => _memoryWriter.WriteToAddresses(process, lastFoundAddresses.ToList(), data));
+
+            // Update UI with results
+            foreach (var result in results)
+            {
+                if (result.Success)
+                    AddResult($"0x{result.Address.ToString("X")} - Yazıldı ({result.BytesWritten} byte)");
+                else
+                    AddResult($"0x{result.Address.ToString("X")} - Yazılamadı: {result.ErrorMessage}");
+            }
+
+            SetStatus("Belleğe yazma tamamlandı");
+        }
+
+        // Upload/load addresses UI
+        private void btnBrowseUpload_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (openFileDialog1 == null) openFileDialog1 = new OpenFileDialog();
+                openFileDialog1.Multiselect = false;
+                openFileDialog1.Filter = "Tüm dosyalar (*.*)|*.*";
+                if (openFileDialog1.ShowDialog() == DialogResult.OK)
+                {
+                    string selected = openFileDialog1.FileName;
+                    if (txtUploadPath != null && !txtUploadPath.IsDisposed && txtUploadPath.IsHandleCreated)
+                    {
+                        try { txtUploadPath.Invoke((Action)(() => txtUploadPath.Text = selected)); } catch { txtUploadPath.Text = selected; }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Dosya seçme hatası: " + ex.Message);
+                Log("Browse error: " + ex.Message);
+            }
+        }
+
+        private void btnUpload_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                string source = (txtUploadPath != null) ? txtUploadPath.Text : null;
+                if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+                {
+                    MessageBox.Show("Lütfen yüklemek için bir dosya seçin.");
+                    return;
+                }
+
+                string destPath = _addressFileManager.UploadFile(source);
+
+                SetStatus("Dosya yüklendi: " + Path.GetFileName(destPath));
+                MessageBox.Show("Dosya başarıyla yüklendi:\n" + destPath);
+
+                // after upload, load addresses from file
+                try { LoadAddressesFromFile(destPath); } catch (Exception ex) { Log("LoadAddressesFromFile error: " + ex.Message); }
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Yükleme hatası: " + ex.Message);
+                Log("Upload error: " + ex.Message);
+                MessageBox.Show("Yükleme sırasında hata: " + ex.Message);
+            }
+        }
+
+        private void LoadUploadedFiles()
+        {
+            try
+            {
+                // Just ensure the uploads directory exists
+                var files = _addressFileManager.GetUploadedFiles();
+            }
+            catch { }
+        }
+
+        private void LoadAddressesFromFile(string path)
+        {
+            var addresses = _addressFileManager.ImportAddresses(path);
+
+            if (flpAddressesUpload == null || flpAddressesUpload.IsDisposed) return;
+            flpAddressesUpload.Controls.Clear();
+
+            foreach (var fa in addresses)
+            {
+                CreateAddressRow(fa);
+            }
+        }
+
+        private void CreateAddressRow(FoundAddress fa)
+        {
+            try
+            {
+                var panel = new Panel();
+                panel.Width = flpAddressesUpload.ClientSize.Width - 25;
+                panel.Height = 36;
+                panel.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+
+                // Özel isim etiketi (varsa)
+                int nextX = 3;
+                if (!string.IsNullOrEmpty(fa.Name))
+                {
+                    var lblName = new Label();
+                    lblName.Text = fa.Name;
+                    lblName.AutoSize = false;
+                    lblName.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+                    lblName.Location = new System.Drawing.Point(nextX, 6);
+                    lblName.Size = new System.Drawing.Size(80, 24);
+                    lblName.BackColor = System.Drawing.Color.FromArgb(0, 122, 204);
+                    lblName.ForeColor = System.Drawing.Color.White;
+                    lblName.Font = new System.Drawing.Font(lblName.Font, System.Drawing.FontStyle.Bold);
+                    panel.Controls.Add(lblName);
+                    nextX = 90;
+                }
+
+                var lbl = new Label();
+                lbl.Text = $"0x{fa.Address.ToString("X")}";
+                lbl.AutoSize = false;
+                lbl.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+                lbl.Location = new System.Drawing.Point(nextX, 6);
+                lbl.Size = new System.Drawing.Size(120, 24);
+                lbl.BackColor = System.Drawing.Color.Transparent;
+                lbl.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                panel.Controls.Add(lbl);
+
+                int txtX = nextX + 127;
+                var txt = new TextBox();
+                txt.Name = "txtAddrVal_" + fa.Address.ToString("X");
+                txt.Location = new System.Drawing.Point(txtX, 6);
+                txt.Size = new System.Drawing.Size(180, 22);
+                txt.BackColor = System.Drawing.Color.FromArgb(51, 51, 55);
+                txt.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                txt.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+                panel.Controls.Add(txt);
+
+                int btnReadX = txtX + 190;
+                var btnRead = new Button();
+                btnRead.Text = "Oku";
+                btnRead.Location = new System.Drawing.Point(btnReadX, 5);
+                btnRead.Size = new System.Drawing.Size(60, 24);
+                btnRead.BackColor = System.Drawing.Color.FromArgb(62, 62, 64);
+                btnRead.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                btnRead.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                btnRead.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(80, 80, 80);
+                btnRead.Tag = new Tuple<FoundAddress, TextBox>(fa, txt);
+                btnRead.Click += (s, ev) =>
+                {
+                    try
+                    {
+                        var tup = (Tuple<FoundAddress, TextBox>)((Button)s).Tag;
+                        var val = ReadAddressValueFromUI(tup.Item1);
+                        if (val != null) tup.Item2.Text = val;
+                    }
+                    catch (Exception ex) { Log("Read button error: " + ex.Message); }
+                };
+                panel.Controls.Add(btnRead);
+
+                int btnWriteX = btnReadX + 70;
+                var btnWriteSingle = new Button();
+                btnWriteSingle.Text = "Yaz";
+                btnWriteSingle.Location = new System.Drawing.Point(btnWriteX, 5);
+                btnWriteSingle.Size = new System.Drawing.Size(60, 24);
+                btnWriteSingle.BackColor = System.Drawing.Color.FromArgb(62, 62, 64);
+                btnWriteSingle.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                btnWriteSingle.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                btnWriteSingle.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(80, 80, 80);
+                btnWriteSingle.Tag = new Tuple<FoundAddress, TextBox>(fa, txt);
+                btnWriteSingle.Click += (s, ev) =>
+                {
+                    try
+                    {
+                        var tup = (Tuple<FoundAddress, TextBox>)((Button)s).Tag;
+                        ApplyAddressValueFromUI(tup.Item1, tup.Item2.Text);
+                    }
+                    catch (Exception ex) { Log("Write button error: " + ex.Message); }
+                };
+                panel.Controls.Add(btnWriteSingle);
+
+                flpAddressesUpload.Controls.Add(panel);
+            }
+            catch (Exception ex) { Log("CreateAddressRow error: " + ex.Message); }
+        }
+
+        private string ReadAddressValueFromUI(FoundAddress fa)
+        {
+            if (cbProcessesUpload.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return null; }
+            var item = cbProcessesUpload.SelectedItem as ProcessItem;
+            if (item == null) { MessageBox.Show("Geçersiz process."); return null; }
+
+            if (!_processManager.IsProcessRunning(item.Process.Id))
+            {
+                MessageBox.Show("Process çalışmıyor. Yenileyin.");
+                return null;
+            }
+
+            var process = _processManager.GetProcessById(item.Process.Id);
+            if (process == null) return null;
+
+            return _memoryWriter.ReadAddressValue(process, fa);
+        }
+
+        private void ApplyAddressValueFromUI(FoundAddress fa, string newValueText)
+        {
+            if (string.IsNullOrWhiteSpace(newValueText)) { MessageBox.Show("Lütfen bir değer girin."); return; }
+            if (!_valueConverter.GetBytesForType(fa.Subtype, newValueText, out byte[] bytes, out string err)) { MessageBox.Show("Parse hatası: " + err); return; }
+            if (cbProcessesUpload.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+
+            var item = cbProcessesUpload.SelectedItem as ProcessItem;
+            if (item == null) { MessageBox.Show("Geçersiz process."); return; }
+
+            if (!_processManager.IsProcessRunning(item.Process.Id))
+            {
+                MessageBox.Show("Process çalışmıyor. Yenileyin.");
+                return;
+            }
+
+            var process = _processManager.GetProcessById(item.Process.Id);
+            if (process == null) { MessageBox.Show("Process bulunamadı."); return; }
+
+            var result = _memoryWriter.WriteToAddress(process, fa, bytes);
+
+            if (result.Success)
+            {
+                AddResult($"0x{fa.Address.ToString("X")} - Yazıldı");
+                MessageBox.Show("Başarıyla yazıldı!");
+            }
+            else
+            {
+                MessageBox.Show("Yazma başarısız: " + result.ErrorMessage);
+            }
+        }
+
+        #region ILogger Implementation
+
+        public void Log(string message)
+        {
+            try
+            {
+                string line = $"[{DateTime.Now:HH:mm:ss}] {message}" + Environment.NewLine;
+                if (txtLog == null || txtLog.IsDisposed) return;
+                _logQueue.Enqueue(line);
+            }
+            catch { }
+        }
+
+        public void LogError(string message, Exception exception = null)
+        {
+            string fullMessage = exception != null ? $"{message}: {exception.Message}" : message;
+            Log($"ERROR: {fullMessage}");
+        }
+
+        public void LogWarning(string message)
+        {
+            Log($"WARNING: {message}");
+        }
+
+        public void LogInfo(string message)
+        {
+            Log($"INFO: {message}");
+        }
+
+        public void SetStatus(string status)
+        {
+            try { Interlocked.Exchange(ref _latestStatus, status); } catch { }
+        }
+
+        #endregion
+
+        private void FlushUiQueues()
+        {
+            try
+            {
+                // Flush logs
+                if (!_logQueue.IsEmpty && txtLog != null && !txtLog.IsDisposed && txtLog.IsHandleCreated)
+                {
+                    var sb = new StringBuilder();
+                    while (_logQueue.TryDequeue(out var ln)) sb.Append(ln);
+                    if (sb.Length > 0)
+                    {
+                        try { txtLog.Invoke((Action)(() => txtLog.AppendText(sb.ToString()))); } catch { }
+                        // Also append the same text to the import tab log if present
+                        try { if (txtLogUpload != null && !txtLogUpload.IsDisposed && txtLogUpload.IsHandleCreated) txtLogUpload.Invoke((Action)(() => txtLogUpload.AppendText(sb.ToString()))); } catch { }
+                    }
+                }
+
+                // Handle clear results request
+                if (_clearResultsRequested && lstResults != null && !lstResults.IsDisposed && lstResults.IsHandleCreated)
+                {
+                    try { lstResults.Invoke((Action)(() => lstResults.Items.Clear())); } catch { }
+                    _clearResultsRequested = false;
+                }
+
+                // Flush results
+                if (!_resultQueue.IsEmpty && lstResults != null && !lstResults.IsDisposed && lstResults.IsHandleCreated)
+                {
+                    var items = new List<string>();
+                    while (_resultQueue.TryDequeue(out var r)) items.Add(r);
+                    if (items.Count > 0)
+                    {
+                        try { lstResults.Invoke((Action)(() => { foreach (var it in items) lstResults.Items.Add(it); })); } catch { }
+                    }
+                }
+
+                // Latest status
+                if (_latestStatus != null && lblStatus != null && !lblStatus.IsDisposed && lblStatus.IsHandleCreated)
+                {
+                    var s = Interlocked.Exchange(ref _latestStatus, null);
+                    if (s != null)
+                    {
+                        try { lblStatus.Invoke((Action)(() => lblStatus.Text = s)); } catch { }
+                        // Also set the same status text on the import tab status label if present
+                        try { if (lblStatusUpload != null && !lblStatusUpload.IsDisposed && lblStatusUpload.IsHandleCreated) lblStatusUpload.Invoke((Action)(() => lblStatusUpload.Text = s)); } catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void AddResult(string text)
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated)
+                {
+                    _resultQueue.Enqueue(text);
+                    return;
+                }
+                _resultQueue.Enqueue(text);
+            }
+            catch { }
+        }
+
+        private void ClearResults() { try { _clearResultsRequested = true; } catch { } }
+
+        // Export found addresses to file
+        private void ExportFoundAddressesToFile()
+        {
+            try
+            {
+                var snapshot = lastFoundAddresses.ToList();
+                if (!snapshot.Any()) { MessageBox.Show("Kaydedilecek adres yok."); return; }
+
+                // İsimlendirme dialog'u aç
+                using (var nameDialog = new Form())
+                {
+                    nameDialog.Text = "Adresleri İsimlendir";
+                    nameDialog.Size = new System.Drawing.Size(500, 400);
+                    nameDialog.StartPosition = FormStartPosition.CenterParent;
+                    nameDialog.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+                    nameDialog.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                    nameDialog.FormBorderStyle = FormBorderStyle.FixedDialog;
+                    nameDialog.MaximizeBox = false;
+                    nameDialog.MinimizeBox = false;
+
+                    var lblInfo = new Label();
+                    lblInfo.Text = "Her adres için özel bir isim girebilirsiniz (isteğe bağlı):";
+                    lblInfo.Location = new System.Drawing.Point(10, 10);
+                    lblInfo.Size = new System.Drawing.Size(460, 20);
+                    lblInfo.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                    nameDialog.Controls.Add(lblInfo);
+
+                    var panel = new Panel();
+                    panel.Location = new System.Drawing.Point(10, 35);
+                    panel.Size = new System.Drawing.Size(465, 280);
+                    panel.AutoScroll = true;
+                    panel.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+                    nameDialog.Controls.Add(panel);
+
+                    var textBoxes = new List<(FoundAddress fa, TextBox txt)>();
+                    int yPos = 5;
+
+                    foreach (var fa in snapshot)
+                    {
+                        var lbl = new Label();
+                        lbl.Text = $"0x{fa.Address.ToString("X")} ({fa.Subtype}):";
+                        lbl.Location = new System.Drawing.Point(5, yPos + 3);
+                        lbl.Size = new System.Drawing.Size(200, 20);
+                        lbl.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                        panel.Controls.Add(lbl);
+
+                        var txt = new TextBox();
+                        txt.Location = new System.Drawing.Point(210, yPos);
+                        txt.Size = new System.Drawing.Size(230, 22);
+                        txt.BackColor = System.Drawing.Color.FromArgb(51, 51, 55);
+                        txt.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                        txt.BorderStyle = BorderStyle.FixedSingle;
+                        txt.Text = fa.Name ?? ""; // Mevcut ismi göster
+                        panel.Controls.Add(txt);
+
+                        textBoxes.Add((fa, txt));
+                        yPos += 30;
+                    }
+
+                    var btnOk = new Button();
+                    btnOk.Text = "Kaydet";
+                    btnOk.Location = new System.Drawing.Point(290, 325);
+                    btnOk.Size = new System.Drawing.Size(80, 28);
+                    btnOk.BackColor = System.Drawing.Color.FromArgb(0, 122, 204);
+                    btnOk.ForeColor = System.Drawing.Color.White;
+                    btnOk.FlatStyle = FlatStyle.Flat;
+                    btnOk.DialogResult = DialogResult.OK;
+                    nameDialog.Controls.Add(btnOk);
+
+                    var btnCancel = new Button();
+                    btnCancel.Text = "İptal";
+                    btnCancel.Location = new System.Drawing.Point(380, 325);
+                    btnCancel.Size = new System.Drawing.Size(80, 28);
+                    btnCancel.BackColor = System.Drawing.Color.FromArgb(62, 62, 64);
+                    btnCancel.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                    btnCancel.FlatStyle = FlatStyle.Flat;
+                    btnCancel.DialogResult = DialogResult.Cancel;
+                    nameDialog.Controls.Add(btnCancel);
+
+                    nameDialog.AcceptButton = btnOk;
+                    nameDialog.CancelButton = btnCancel;
+
+                    if (nameDialog.ShowDialog() == DialogResult.OK)
+                    {
+                        // İsimleri güncelle
+                        foreach (var (fa, txt) in textBoxes)
+                        {
+                            string name = txt.Text.Trim();
+                            fa.Name = string.IsNullOrEmpty(name) ? null : name;
+                        }
+
+                        // Kayıt yeri seç
+                        using (var saveDialog = new SaveFileDialog())
+                        {
+                            saveDialog.Filter = "Text dosyası (*.txt)|*.txt|Tüm dosyalar (*.*)|*.*";
+                            saveDialog.DefaultExt = "txt";
+                            saveDialog.FileName = "found_addresses.txt";
+                            saveDialog.InitialDirectory = AppDomain.CurrentDomain.BaseDirectory;
+
+                            if (saveDialog.ShowDialog() == DialogResult.OK)
+                            {
+                                _addressFileManager.ExportAddresses(snapshot, saveDialog.FileName);
+                                SetStatus($"Adresler dosyaya yazıldı: {saveDialog.FileName}");
+                                MessageBox.Show("Adresler dışa aktarıldı:\n" + saveDialog.FileName);
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) { SetStatus("Dışa aktarma hatası: " + ex.Message); Log("Export error: " + ex.Message); }
+        }
+
+        // Designer-export button handler (wired in Designer)
+        private void btnExport_Click(object sender, EventArgs e)
+        {
+            try { ExportFoundAddressesToFile(); } catch (Exception ex) { Log("btnExport_Click error: " + ex.Message); }
+        }
+
+        // Handler to load current lastFoundAddresses into the flow panel and send via HTTP POST
+        private async void btnLoadAddresses_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (flpAddressesUpload == null || flpAddressesUpload.IsDisposed) return;
+                flpAddressesUpload.Controls.Clear();
+                var snapshot = lastFoundAddresses.ToList();
+
+                // UI'a adresleri ekle
+                foreach (var fa in snapshot) CreateAddressRow(fa);
+
+                // HTTP POST ile adresleri gönder
+                if (snapshot.Any())
+                {
+                    await SendAddressesToServer(snapshot);
+                }
+                else
+                {
+                    Log("Gönderilecek adres bulunamadı.");
+                }
+            }
+            catch (Exception ex) { Log("btnLoadAddresses_Click error: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// Adresleri HTTP POST ile sunucuya gönderir
+        /// </summary>
+        private async Task SendAddressesToServer(List<FoundAddress> addresses)
+        {
+            try
+            {
+                SetStatus("Adresler sunucuya gönderiliyor...");
+
+                // Adresleri JSON formatına dönüştür
+                var addressList = addresses.Select(fa => new
+                {
+                    address = $"0x{fa.Address.ToString("X")}",
+                    type = fa.Subtype,
+                    name = fa.Name ?? "",
+                    value = fa.Value != null ? _valueConverter.FormatBytesAsDisplay(fa.Subtype, fa.Value) : ""
+                }).ToList();
+
+                // JSON string oluştur (basit manuel serileştirme - .NET Framework 4.7.2 uyumlu)
+                var sb = new StringBuilder();
+                sb.Append("{\"mesaj\":[");
+                for (int i = 0; i < addressList.Count; i++)
+                {
+                    var addr = addressList[i];
+                    sb.Append("{");
+                    sb.AppendFormat("\"address\":\"{0}\",", EscapeJsonString(addr.address));
+                    sb.AppendFormat("\"type\":\"{0}\",", EscapeJsonString(addr.type));
+                    sb.AppendFormat("\"name\":\"{0}\",", EscapeJsonString(addr.name));
+                    sb.AppendFormat("\"value\":\"{0}\"", EscapeJsonString(addr.value));
+                    sb.Append("}");
+                    if (i < addressList.Count - 1) sb.Append(",");
+                }
+                sb.Append("]}");
+
+                string jsonPayload = sb.ToString();
+                Log($"Gönderilen JSON: {jsonPayload}");
+
+                // HTTP POST isteği gönder
+                var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+                var response = await _httpClient.PostAsync("http://localhost:3000/test", content);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var responseBody = await response.Content.ReadAsStringAsync();
+                    SetStatus("Adresler başarıyla gönderildi!");
+                    Log($"Sunucu yanıtı: {responseBody}");
+                    MessageBox.Show($"Adresler başarıyla gönderildi!\n\nSunucu yanıtı: {responseBody}", "Başarılı", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    SetStatus($"Sunucu hatası: {response.StatusCode}");
+                    Log($"HTTP Hata: {response.StatusCode} - {response.ReasonPhrase}");
+                    MessageBox.Show($"Sunucu hatası: {response.StatusCode}\n{response.ReasonPhrase}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (HttpRequestException ex)
+            {
+                SetStatus("Bağlantı hatası!");
+                Log($"HTTP Request hatası: {ex.Message}");
+                MessageBox.Show($"Sunucuya bağlanılamadı!\n\nHata: {ex.Message}\n\nSunucunun http://localhost:3000 adresinde çalıştığından emin olun.", "Bağlantı Hatası", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Gönderme hatası!");
+                Log($"SendAddressesToServer hatası: {ex.Message}");
+                MessageBox.Show($"Adresler gönderilemedi!\n\nHata: {ex.Message}", "Hata", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// JSON string için escape işlemi yapar
+        /// </summary>
+        private string EscapeJsonString(string str)
+        {
+            if (string.IsNullOrEmpty(str)) return "";
+            return str
+                .Replace("\\", "\\\\")
+                .Replace("\"", "\\\"")
+                .Replace("\n", "\\n")
+                .Replace("\r", "\\r")
+                .Replace("\t", "\\t");
+        }
+
+        // Handler for process combobox selection change (no-op - single combobox used)
+        private void cbProcesses_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            // no action required when using single process combobox
+        }
+
+        // Thread-safe helper classes
+        class ProcessItem
+        {
+            public Process Process { get; set; }
+            public string Display { get; set; }
+            public override string ToString() { return Display; }
+        }
+
+        private void lblStatus_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void tabScan_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblWriteValue_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void progressBarScan_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblValue_Click(object sender, EventArgs e)
+        {
+
+        }
+    }
+}

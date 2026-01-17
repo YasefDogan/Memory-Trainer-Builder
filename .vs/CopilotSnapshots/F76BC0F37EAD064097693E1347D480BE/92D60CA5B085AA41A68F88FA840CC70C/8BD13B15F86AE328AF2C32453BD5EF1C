@@ -1,0 +1,355 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Runtime.CompilerServices;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.IO;
+
+namespace cheat_engine
+{
+    public partial class Form1 : Form
+    {
+        private List<FoundAddress> lastFoundAddresses = new List<FoundAddress>();
+        private string lastSearchType = "Int";
+
+        // --- New fields for batched UI updates ---
+        private readonly ConcurrentQueue<string> _logQueue = new ConcurrentQueue<string>();
+        private readonly ConcurrentQueue<string> _resultQueue = new ConcurrentQueue<string>();
+        private volatile string _latestStatus = null;
+        private volatile bool _clearResultsRequested = false;
+        private readonly System.Windows.Forms.Timer _uiFlushTimer;
+        // ------------------------------------------
+
+        public Form1()
+        {
+            InitializeComponent();
+
+            // Programmatic export button: small, placed near bottom-left. If you use the Designer, remove this and add via Designer.
+            try
+            {
+                var btnExport = new Button();
+                btnExport.Name = "btnExport";
+                btnExport.Text = "Dışa Aktar";
+                btnExport.Size = new System.Drawing.Size(100, 26);
+                // Adjust location if it overlaps other controls in your form
+                btnExport.Location = new System.Drawing.Point(12, 410);
+                btnExport.Click += (s, e) => ExportFoundAddressesToFile();
+                this.Controls.Add(btnExport);
+            }
+            catch { }
+
+            // Setup UI flush timer to batch updates and avoid flooding the STA thread
+            _uiFlushTimer = new System.Windows.Forms.Timer();
+            _uiFlushTimer.Interval = 150; // ms - tune as needed
+            _uiFlushTimer.Tick += (s, e) => FlushUiQueues();
+            _uiFlushTimer.Start();
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+            // LoadUploadedFiles is optional; ensure method exists
+            LoadUploadedFiles();
+        }
+
+        // Load lastFoundAddresses into the flow panel; create per-address row: address label, textbox for new value, Apply button
+        private void btnLoadAddresses_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (flpAddressesUpload == null || flpAddressesUpload.IsDisposed) return;
+                flpAddressesUpload.Controls.Clear();
+
+                var snapshot = lastFoundAddresses.ToList();
+                foreach (var fa in snapshot)
+                {
+                    var panel = new Panel();
+                    panel.Width = flpAddressesUpload.ClientSize.Width - 25;
+                    panel.Height = 30;
+
+                    var lbl = new Label();
+                    lbl.Text = $"0x{fa.Address.ToString("X")} ({MapSubtypeToShort(fa.Subtype)})";
+                    lbl.AutoSize = false;
+                    lbl.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+                    lbl.Location = new System.Drawing.Point(3, 6);
+                    lbl.Size = new System.Drawing.Size(250, 18);
+                    panel.Controls.Add(lbl);
+
+                    var txt = new TextBox();
+                    txt.Name = "txtAddrVal_" + fa.Address.ToString("X");
+                    txt.Location = new System.Drawing.Point(260, 3);
+                    txt.Size = new System.Drawing.Size(200, 22);
+                    txt.Text = string.Empty;
+                    panel.Controls.Add(txt);
+
+                    var btn = new Button();
+                    btn.Text = "Uygula";
+                    btn.Tag = new Tuple<FoundAddress, TextBox>(fa, txt);
+                    btn.Location = new System.Drawing.Point(470, 2);
+                    btn.Size = new System.Drawing.Size(75, 24);
+                    btn.Click += (s2, e2) =>
+                    {
+                        try
+                        {
+                            var tup = (Tuple<FoundAddress, TextBox>)((Button)s2).Tag;
+                            ApplyAddressValue(tup.Item1, tup.Item2.Text);
+                        }
+                        catch (Exception ex) { AppendLog("Apply button error: " + ex.Message); }
+                    };
+                    panel.Controls.Add(btn);
+
+                    flpAddressesUpload.Controls.Add(panel);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppendLog("LoadAddresses error: " + ex.Message);
+            }
+        }
+
+        // Browse button handler for upload tab
+        private void btnBrowseUpload_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (openFileDialog1 == null) openFileDialog1 = new OpenFileDialog();
+                openFileDialog1.Multiselect = false;
+                openFileDialog1.Filter = "Tüm dosyalar (*.*)|*.*";
+                if (openFileDialog1.ShowDialog() == DialogResult.OK)
+                {
+                    string selected = openFileDialog1.FileName;
+                    if (txtUploadPath != null && !txtUploadPath.IsDisposed && txtUploadPath.IsHandleCreated)
+                    {
+                        try { txtUploadPath.Invoke((Action)(() => txtUploadPath.Text = selected)); } catch { txtUploadPath.Text = selected; }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Dosya seçme hatası: " + ex.Message);
+                AppendLog("Browse error: " + ex.Message);
+            }
+        }
+
+        // Upload button handler: copy selected file into uploads folder
+        private void btnUpload_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                string source = (txtUploadPath != null) ? txtUploadPath.Text : null;
+                if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+                {
+                    MessageBox.Show("Lütfen yüklemek için bir dosya seçin.");
+                    return;
+                }
+
+                string uploadsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uploads");
+                Directory.CreateDirectory(uploadsDir);
+
+                string destFileName = Path.GetFileName(source);
+                string destPath = Path.Combine(uploadsDir, destFileName);
+
+                File.Copy(source, destPath, true);
+
+                AddStatus("Dosya yüklendi: " + destFileName);
+                AppendLog($"Uploaded file {source} -> {destPath}");
+
+                MessageBox.Show("Dosya başarıyla yüklendi:\n" + destPath);
+
+                // After upload, try to load addresses from this file and create per-address UI rows
+                try { LoadAddressesFromFile(destPath); } catch (Exception ex) { AppendLog("LoadAddressesFromFile error: " + ex.Message); }
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Yükleme hatası: " + ex.Message);
+                AppendLog("Upload error: " + ex.Message);
+                MessageBox.Show("Yükleme sırasında hata: " + ex.Message);
+            }
+        }
+
+        // Load uploaded files or prepare uploads folder (no UI list in new layout)
+        private void LoadUploadedFiles()
+        {
+            try
+            {
+                string uploadsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uploads");
+                if (!Directory.Exists(uploadsDir)) Directory.CreateDirectory(uploadsDir);
+                // No automatic listing in new UI; user can upload files with btnUpload
+            }
+            catch { }
+        }
+
+        // Load addresses from a file (format: lines like "0x1234 int") and create UI rows
+        private void LoadAddressesFromFile(string path)
+        {
+            if (!File.Exists(path)) throw new FileNotFoundException(path);
+            var lines = File.ReadAllLines(path);
+            var parsed = new List<(IntPtr addr, string subtype)>();
+            foreach (var ln in lines)
+            {
+                var s = ln.Trim();
+                if (string.IsNullOrEmpty(s)) continue;
+                var parts = s.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 1) continue;
+                string addrPart = parts[0];
+                string typePart = (parts.Length >= 2) ? parts[1] : "Int32";
+                try
+                {
+                    if (addrPart.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) addrPart = addrPart.Substring(2);
+                    long val = long.Parse(addrPart, System.Globalization.NumberStyles.HexNumber);
+                    IntPtr addr = new IntPtr(val);
+                    string subtype = MapShortToSubtype(typePart);
+                    parsed.Add((addr, subtype));
+                }
+                catch (Exception ex) { AppendLog("Parse line failed: " + ln + " -> " + ex.Message); }
+            }
+
+            if (flpAddressesUpload == null || flpAddressesUpload.IsDisposed) return;
+            flpAddressesUpload.Controls.Clear();
+
+            foreach (var p in parsed)
+            {
+                var fa = new FoundAddress { Address = p.addr, Subtype = p.subtype, Value = null };
+                CreateAddressRow(fa);
+            }
+        }
+
+        // Create a single UI row in the flow panel for an address with read/write buttons
+        private void CreateAddressRow(FoundAddress fa)
+        {
+            try
+            {
+                var panel = new Panel();
+                panel.Width = flpAddressesUpload.ClientSize.Width - 25;
+                panel.Height = 36;
+
+                var lbl = new Label();
+                lbl.Text = $"0x{fa.Address.ToString("X")}";
+                lbl.AutoSize = false;
+                lbl.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+                lbl.Location = new System.Drawing.Point(3, 6);
+                lbl.Size = new System.Drawing.Size(120, 24);
+                panel.Controls.Add(lbl);
+
+                var txt = new TextBox();
+                txt.Name = "txtAddrVal_" + fa.Address.ToString("X");
+                txt.Location = new System.Drawing.Point(130, 6);
+                txt.Size = new System.Drawing.Size(240, 22);
+                panel.Controls.Add(txt);
+
+                var btnRead = new Button();
+                btnRead.Text = "Oku";
+                btnRead.Location = new System.Drawing.Point(380, 5);
+                btnRead.Size = new System.Drawing.Size(60, 24);
+                btnRead.Tag = new Tuple<FoundAddress, TextBox>(fa, txt);
+                btnRead.Click += (s, e) =>
+                {
+                    try
+                    {
+                        var tup = (Tuple<FoundAddress, TextBox>)((Button)s).Tag;
+                        var val = ReadAddressValue(tup.Item1);
+                        if (val != null) tup.Item2.Text = val;
+                    }
+                    catch (Exception ex) { AppendLog("Read button error: " + ex.Message); }
+                };
+                panel.Controls.Add(btnRead);
+
+                var btnWriteSingle = new Button();
+                btnWriteSingle.Text = "Yaz";
+                btnWriteSingle.Location = new System.Drawing.Point(450, 5);
+                btnWriteSingle.Size = new System.Drawing.Size(60, 24);
+                btnWriteSingle.Tag = new Tuple<FoundAddress, TextBox>(fa, txt);
+                btnWriteSingle.Click += (s, e) =>
+                {
+                    try
+                    {
+                        var tup = (Tuple<FoundAddress, TextBox>)((Button)s).Tag;
+                        ApplyAddressValue(tup.Item1, tup.Item2.Text);
+                    }
+                    catch (Exception ex) { AppendLog("Write button error: " + ex.Message); }
+                };
+                panel.Controls.Add(btnWriteSingle);
+
+                flpAddressesUpload.Controls.Add(panel);
+            }
+            catch (Exception ex) { AppendLog("CreateAddressRow error: " + ex.Message); }
+        }
+
+        // Read a single address from target process and return string representation according to subtype
+        private string ReadAddressValue(FoundAddress fa)
+        {
+            try
+            {
+                if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return null; }
+                var item = cbProcesses.SelectedItem as ProcessItem;
+                var process = item.Process;
+
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { MessageBox.Show("Process açılamadı (okuma izni yok)."); return null; }
+                try
+                {
+                    int len = 8;
+                    switch (fa.Subtype)
+                    {
+                        case "Int8": case "UInt8": len = 1; break;
+                        case "Int16": case "UInt16": len = 2; break;
+                        case "Int32": case "UInt32": case "Float32": len = 4; break;
+                        case "Int64": case "UInt64": case "Float64": len = 8; break;
+                        default: len = 4; break;
+                    }
+                    byte[] buffer = new byte[len];
+                    IntPtr bytesRead;
+                    bool ok = ReadProcessMemory(hProcess, fa.Address, buffer, buffer.Length, out bytesRead);
+                    if (!ok) { int errc = Marshal.GetLastWin32Error(); AppendLog($"ReadProcessMemory failed at 0x{fa.Address.ToString("X")} Err={errc}"); return null; }
+                    int actual = bytesRead.ToInt32();
+                    if (actual <= 0) return null;
+                    switch (fa.Subtype)
+                    {
+                        case "Int8": return ((sbyte)buffer[0]).ToString();
+                        case "UInt8": return buffer[0].ToString();
+                        case "Int16": return BitConverter.ToInt16(buffer, 0).ToString();
+                        case "UInt16": return BitConverter.ToUInt16(buffer, 0).ToString();
+                        case "Int32": return BitConverter.ToInt32(buffer, 0).ToString();
+                        case "UInt32": return BitConverter.ToUInt32(buffer, 0).ToString();
+                        case "Int64": return BitConverter.ToInt64(buffer, 0).ToString();
+                        case "UInt64": return BitConverter.ToUInt64(buffer, 0).ToString();
+                        case "Float32": return BitConverter.ToSingle(buffer, 0).ToString(CultureInfo.InvariantCulture);
+                        case "Float64": return BitConverter.ToDouble(buffer, 0).ToString(CultureInfo.InvariantCulture);
+                        default: return BitConverter.ToString(buffer, 0, Math.Min(actual, buffer.Length));
+                    }
+                }
+                finally { CloseHandle(hProcess); }
+            }
+            catch (Exception ex) { AppendLog("ReadAddressValue exception: " + ex.Message); return null; }
+        }
+
+        // Map short type token from file back to our internal subtype
+        private string MapShortToSubtype(string shortType)
+        {
+            if (string.IsNullOrEmpty(shortType)) return "Int32";
+            shortType = shortType.Trim().ToLowerInvariant();
+            switch (shortType)
+            {
+                case "int8": return "Int8";
+                case "uint8": return "UInt8";
+                case "int16": return "Int16";
+                case "uint16": return "UInt16";
+                case "int32": case "int": return "Int32";
+                case "uint32": return "UInt32";
+                case "int64": return "Int64";
+                case "uint64": return "UInt64";
+                case "float": case "float32": return "Float32";
+                case "double": case "float64": return "Float64";
+                case "bytes": case "hex": case "bytes(hex)": return "Bytes (Hex)";
+                default: return shortType;
+            }
+        }
+***
+*** End Patch

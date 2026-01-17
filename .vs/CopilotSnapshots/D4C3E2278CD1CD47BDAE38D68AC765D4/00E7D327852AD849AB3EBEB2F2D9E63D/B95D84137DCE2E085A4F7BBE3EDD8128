@@ -1,0 +1,351 @@
+﻿using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Data;
+using System.Diagnostics;
+using System.Drawing;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace cheat_engine
+{
+    public partial class Form1 : Form
+    {
+        private List<IntPtr> lastFoundAddresses = new List<IntPtr>();
+        private string lastSearchType = "Int32";
+
+        public Form1()
+        {
+            InitializeComponent();
+        }
+
+        // P/Invoke for ReadProcessMemory
+        [DllImport("kernel32.dll")]
+        static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr hObject);
+
+        const int PROCESS_WM_READ = 0x0010;
+        const int PROCESS_QUERY_INFORMATION = 0x0400;
+        const int PROCESS_VM_OPERATION = 0x0008;
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+        }
+
+        private void RefreshProcessList()
+        {
+            cbProcesses.Items.Clear();
+            var procs = Process.GetProcesses().OrderBy(p => p.ProcessName).ToList();
+            foreach (var p in procs)
+            {
+                try
+                {
+                    cbProcesses.Items.Add(new ProcessItem { Process = p, Display = $"{p.ProcessName} ({p.Id})" });
+                }
+                catch { }
+            }
+            if (cbProcesses.Items.Count > 0)
+                cbProcesses.SelectedIndex = 0;
+        }
+
+        private void btnRefresh_Click(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+        }
+
+        private async void btnScan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null)
+            {
+                MessageBox.Show("Lütfen bir process seçin.");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(txtValue.Text))
+            {
+                MessageBox.Show("Lütfen aranacak değeri girin.");
+                return;
+            }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string searchType = cbType.SelectedItem?.ToString() ?? "Int32";
+            string searchValue = txtValue.Text;
+
+            lstResults.Items.Clear();
+            lastFoundAddresses.Clear();
+            lastSearchType = searchType;
+            AddStatus("Tarama başlıyor...");
+
+            await Task.Run(() => ScanProcessAndStore(process, searchValue, searchType));
+
+            AddStatus("Tamamlandı");
+        }
+
+        private void ScanProcessAndStore(Process process, string valueText, string type)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero)
+                {
+                    AddStatus($"{process.ProcessName}: açılmadı");
+                    return;
+                }
+
+                lastFoundAddresses.Clear();
+
+                // Iterate modules and scan
+                ProcessModuleCollection modules = null;
+                try
+                {
+                    modules = process.Modules;
+                }
+                catch (Exception ex)
+                {
+                    AddStatus("Modüller okunamadı: " + ex.Message);
+                }
+
+                if (modules == null)
+                {
+                    CloseHandle(hProcess);
+                    return;
+                }
+
+                foreach (ProcessModule module in modules)
+                {
+                    IntPtr baseAddr = module.BaseAddress;
+                    int moduleSize = module.ModuleMemorySize;
+
+                    // Skip invalid sizes
+                    if (moduleSize <= 0) continue;
+
+                    byte[] buffer = new byte[moduleSize];
+                    IntPtr bytesRead;
+                    try
+                    {
+                        if (ReadProcessMemory(hProcess, baseAddr, buffer, moduleSize, out bytesRead))
+                        {
+                            if (type == "Int32")
+                            {
+                                if (!int.TryParse(valueText, out int v))
+                                {
+                                    AddStatus("Int32 için geçerli bir sayı girin.");
+                                    CloseHandle(hProcess);
+                                    return;
+                                }
+                                byte[] target = BitConverter.GetBytes(v);
+                                for (int i = 0; i <= moduleSize - 4; i++)
+                                {
+                                    if (buffer[i] == target[0] && buffer[i + 1] == target[1] && buffer[i + 2] == target[2] && buffer[i + 3] == target[3])
+                                    {
+                                        IntPtr foundAddr = IntPtr.Add(baseAddr, i);
+                                        lastFoundAddresses.Add(foundAddr);
+                                        AddResult($"{process.ProcessName} - Modul: {module.ModuleName} - Adres: 0x{foundAddr.ToString("X")}");
+                                    }
+                                }
+                            }
+                            else if (type == "Float")
+                            {
+                                if (!float.TryParse(valueText, out float vf))
+                                {
+                                    AddStatus("Float için geçerli bir sayı girin.");
+                                    CloseHandle(hProcess);
+                                    return;
+                                }
+                                byte[] target = BitConverter.GetBytes(vf);
+                                for (int i = 0; i <= moduleSize - 4; i++)
+                                {
+                                    if (buffer[i] == target[0] && buffer[i + 1] == target[1] && buffer[i + 2] == target[2] && buffer[i + 3] == target[3])
+                                    {
+                                        IntPtr foundAddr = IntPtr.Add(baseAddr, i);
+                                        lastFoundAddresses.Add(foundAddr);
+                                        AddResult($"{process.ProcessName} - Modul: {module.ModuleName} - Adres: 0x{foundAddr.ToString("X")}");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddStatus("ReadProcessMemory hata: " + ex.Message);
+                    }
+                }
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Hata: " + ex.Message);
+            }
+        }
+
+        private async void btnRescan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null)
+            {
+                MessageBox.Show("Lütfen bir process seçin.");
+                return;
+            }
+
+            if (!lastFoundAddresses.Any())
+            {
+                MessageBox.Show("Önce bir tarama yapın.");
+                return;
+            }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string newType = cbType.SelectedItem?.ToString() ?? "Int32";
+            string newValue = txtValue.Text;
+
+            AddStatus("Tekrar taranıyor...");
+
+            await Task.Run(() => RescanAddresses(process, lastFoundAddresses.ToList(), newValue, newType));
+
+            AddStatus("Tekrar tarama tamamlandı");
+        }
+
+        private void RescanAddresses(Process process, List<IntPtr> addresses, string valueText, string type)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero)
+                {
+                    AddStatus($"{process.ProcessName}: açılmadı");
+                    return;
+                }
+
+                ClearResults();
+
+                foreach (var addr in addresses)
+                {
+                    byte[] buffer = new byte[4];
+                    IntPtr bytesRead;
+                    try
+                    {
+                        if (ReadProcessMemory(hProcess, addr, buffer, buffer.Length, out bytesRead))
+                        {
+                            bool match = false;
+                            if (type == "Int32")
+                            {
+                                if (int.TryParse(valueText, out int v))
+                                {
+                                    int read = BitConverter.ToInt32(buffer, 0);
+                                    match = read == v;
+                                }
+                            }
+                            else if (type == "Float")
+                            {
+                                if (float.TryParse(valueText, out float vf))
+                                {
+                                    float read = BitConverter.ToSingle(buffer, 0);
+                                    match = Math.Abs(read - vf) < 0.0001f;
+                                }
+                            }
+
+                            AddResult($"Adres: 0x{addr.ToString("X")} - Şu an: { (match ? "Eşleşiyor" : "Farklı") }");
+                        }
+                        else
+                        {
+                            AddResult($"Adres: 0x{addr.ToString("X")} - Okunamadı");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddResult($"Adres: 0x{addr.ToString("X")} - Hata: " + ex.Message);
+                    }
+                }
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Hata: " + ex.Message);
+            }
+        }
+
+        private void ClearResults()
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated)
+                    return;
+
+                if (lstResults.InvokeRequired)
+                {
+                    lstResults.BeginInvoke(new Action(() =>
+                    {
+                        if (!lstResults.IsDisposed && lstResults.IsHandleCreated)
+                            lstResults.Items.Clear();
+                    }));
+                    return;
+                }
+
+                lstResults.Items.Clear();
+            }
+            catch { }
+        }
+
+        delegate void AddResultDelegate(string text);
+        private void AddResult(string text)
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated)
+                    return;
+
+                if (lstResults.InvokeRequired)
+                {
+                    lstResults.BeginInvoke(new Action(() =>
+                    {
+                        if (!lstResults.IsDisposed && lstResults.IsHandleCreated)
+                            lstResults.Items.Add(text);
+                    }));
+                    return;
+                }
+                lstResults.Items.Add(text);
+            }
+            catch { }
+        }
+
+        delegate void AddStatusDelegate(string text);
+        private void AddStatus(string text)
+        {
+            try
+            {
+                if (lblStatus == null || lblStatus.IsDisposed || !lblStatus.IsHandleCreated)
+                    return;
+
+                if (lblStatus.InvokeRequired)
+                {
+                    lblStatus.BeginInvoke(new Action(() =>
+                    {
+                        if (!lblStatus.IsDisposed && lblStatus.IsHandleCreated)
+                            lblStatus.Text = text;
+                    }));
+                    return;
+                }
+                lblStatus.Text = text;
+            }
+            catch { }
+        }
+
+        class ProcessItem
+        {
+            public Process Process { get; set; }
+            public string Display { get; set; }
+            public override string ToString() { return Display; }
+        }
+    }
+}

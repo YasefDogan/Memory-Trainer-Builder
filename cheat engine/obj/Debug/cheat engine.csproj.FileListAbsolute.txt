@@ -1,0 +1,22 @@
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\bin\Debug\cheat engine.exe.config
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\bin\Debug\cheat engine.exe
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\bin\Debug\cheat engine.pdb
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat engine.csproj.AssemblyReference.cache
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat_engine.Properties.Resources.resources
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat engine.csproj.GenerateResource.cache
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat engine.csproj.CoreCompileInputs.cache
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat engine.exe
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat engine.pdb
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat engine.exe.config
+C:\Users\yasefdogan\source\repos\cheat engine\cheat engine\obj\Debug\cheat_engine.Form1.resources
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\bin\Debug\cheat engine.exe.config
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\bin\Debug\cheat engine.exe
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\bin\Debug\cheat engine.pdb
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat engine.csproj.AssemblyReference.cache
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat engine.exe.config
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat_engine.Form1.resources
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat_engine.Properties.Resources.resources
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat engine.csproj.GenerateResource.cache
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat engine.csproj.CoreCompileInputs.cache
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat engine.exe
+C:\Users\yasefdogan\Desktop\cheat engine\cheat engine\obj\Debug\cheat engine.pdb

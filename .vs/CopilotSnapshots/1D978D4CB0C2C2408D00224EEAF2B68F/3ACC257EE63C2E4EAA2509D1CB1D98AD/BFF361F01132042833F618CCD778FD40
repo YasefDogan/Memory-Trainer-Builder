@@ -1,0 +1,50 @@
+﻿using System;
+using System.Runtime.InteropServices;
+
+namespace cheat_engine
+{
+    public class Win32ProcessMemoryAccessor : IProcessMemoryAccessor
+    {
+        [DllImport("kernel32.dll")]
+        static extern IntPtr OpenProcessNative(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemoryNative(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool WriteProcessMemoryNative(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int nSize, out IntPtr lpNumberOfBytesWritten);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern UIntPtr VirtualQueryExNative(IntPtr hProcess, IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, UIntPtr dwLength);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandleNative(IntPtr hObject);
+
+        [DllImport("kernel32.dll")]
+        static extern uint GetLastErrorNative();
+
+        public IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId)
+        {
+            return OpenProcessNative(dwDesiredAccess, bInheritHandle, dwProcessId);
+        }
+
+        public bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead)
+        {
+            return ReadProcessMemoryNative(hProcess, lpBaseAddress, lpBuffer, dwSize, out lpNumberOfBytesRead);
+        }
+
+        public bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int nSize, out IntPtr lpNumberOfBytesWritten)
+        {
+            return WriteProcessMemoryNative(hProcess, lpBaseAddress, lpBuffer, nSize, out lpNumberOfBytesWritten);
+        }
+
+        public UIntPtr VirtualQueryEx(IntPtr hProcess, IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, UIntPtr dwLength)
+        {
+            return VirtualQueryExNative(hProcess, lpAddress, out lpBuffer, dwLength);
+        }
+
+        public bool CloseHandle(IntPtr hObject) => CloseHandleNative(hObject);
+
+        public int GetLastError() => (int)GetLastErrorNative();
+    }
+}

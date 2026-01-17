@@ -1,0 +1,376 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace cheat_engine
+{
+    public partial class Form1 : Form
+    {
+        private List<FoundAddress> lastFoundAddresses = new List<FoundAddress>();
+        private string lastSearchType = "Int32";
+
+        public Form1()
+        {
+            InitializeComponent();
+        }
+
+        // P/Invoke
+        [DllImport("kernel32.dll")]
+        static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int nSize, out IntPtr lpNumberOfBytesWritten);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr hObject);
+
+        const int PROCESS_WM_READ = 0x0010;
+        const int PROCESS_QUERY_INFORMATION = 0x0400;
+        const int PROCESS_VM_OPERATION = 0x0008;
+        const int PROCESS_VM_WRITE = 0x0020;
+
+        // P/Invoke for VirtualQueryEx and memory constants
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern UIntPtr VirtualQueryEx(IntPtr hProcess, IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, UIntPtr dwLength);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MEMORY_BASIC_INFORMATION
+        {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public uint AllocationProtect;
+            public IntPtr RegionSize;
+            public uint State;
+            public uint Protect;
+            public uint Type;
+        }
+
+        const uint MEM_COMMIT = 0x1000;
+        const uint PAGE_NOACCESS = 0x01;
+        const uint PAGE_GUARD = 0x100;
+        const uint PAGE_READWRITE = 0x04;
+        const uint PAGE_WRITECOPY = 0x08;
+        const uint PAGE_EXECUTE_READWRITE = 0x40;
+        const uint PAGE_EXECUTE_WRITECOPY = 0x80;
+
+        // Replace module-based scan with region-based scanning (VirtualQueryEx)
+        private void ScanProcessAndStore(Process process, List<(string subtype, byte[] bytes)> targets)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: açılmadı"); return; }
+
+                lastFoundAddresses.Clear();
+
+                // determine if we should restrict to writable pages
+                bool requireWritable = targets.Any(t => t.subtype.StartsWith("Int") || t.subtype.StartsWith("UInt"));
+
+                IntPtr address = IntPtr.Zero;
+                UIntPtr result;
+                int structSize = Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION));
+
+                // compute maximum target length to handle chunk overlaps
+                int maxTlen = 0;
+                foreach (var t in targets) if (t.bytes != null && t.bytes.Length > maxTlen) maxTlen = t.bytes.Length;
+                if (maxTlen <= 0) { AddStatus("Aranacak hedef boş"); CloseHandle(hProcess); return; }
+                int overlap = Math.Max(0, maxTlen - 1);
+
+                while (true)
+                {
+                    MEMORY_BASIC_INFORMATION mbi;
+                    result = VirtualQueryEx(hProcess, address, out mbi, (UIntPtr)structSize);
+                    if (result == UIntPtr.Zero) break;
+
+                    long regionSize = mbi.RegionSize.ToInt64();
+                    bool isCommitted = (mbi.State & MEM_COMMIT) != 0;
+                    bool noAccess = (mbi.Protect & PAGE_NOACCESS) != 0;
+                    bool guard = (mbi.Protect & PAGE_GUARD) != 0;
+
+                    bool isReadable = isCommitted && !noAccess && !guard;
+
+                    // if integer search, require writable pages (reduces false negatives in protected regions)
+                    if (isReadable && requireWritable)
+                    {
+                        uint prot = mbi.Protect;
+                        bool writable = ((prot & PAGE_READWRITE) != 0) || ((prot & PAGE_WRITECOPY) != 0) || ((prot & PAGE_EXECUTE_READWRITE) != 0) || ((prot & PAGE_EXECUTE_WRITECOPY) != 0);
+                        if (!writable) isReadable = false;
+                    }
+
+                    if (isReadable && regionSize > 0)
+                    {
+                        long offset = 0;
+                        const int chunk = 0x10000; // 64KB chunks for speed
+                        int step = Math.Max(1, chunk - overlap);
+
+                        while (offset < regionSize)
+                        {
+                            int toRead = (int)Math.Min(chunk, regionSize - offset);
+                            byte[] buffer = new byte[toRead];
+                            IntPtr bytesRead;
+                            IntPtr readAddress = new IntPtr(mbi.BaseAddress.ToInt64() + offset);
+                            try
+                            {
+                                bool okRead = ReadProcessMemory(hProcess, readAddress, buffer, toRead, out bytesRead);
+                                if (!okRead)
+                                {
+                                    AddStatus($"ReadProcessMemory başarısız @ 0x{readAddress.ToString("X")} (len={toRead})");
+                                }
+                                else
+                                {
+                                    int actualRead = bytesRead.ToInt32();
+                                    if (actualRead <= 0) { offset += step; continue; }
+                                    foreach (var t in targets)
+                                    {
+                                        int tlen = t.bytes.Length;
+                                        if (tlen == 0 || actualRead < tlen) continue;
+
+                                        for (int i = 0; i <= actualRead - tlen; i++)
+                                        {
+                                            bool ok = true;
+                                            for (int j = 0; j < tlen; j++) if (buffer[i + j] != t.bytes[j]) { ok = false; break; }
+                                            if (ok)
+                                            {
+                                                long foundAddrInt = mbi.BaseAddress.ToInt64() + offset + i;
+                                                IntPtr foundAddr = new IntPtr(foundAddrInt);
+                                                lastFoundAddresses.Add(new FoundAddress { Address = foundAddr, Subtype = t.subtype, Value = t.bytes });
+                                                AddResult($"0x{foundAddr.ToString("X")} | {t.subtype} | {FormatBytesAsDisplay(t.subtype, t.bytes)} | {FormatBytesAsDisplay(t.subtype, t.bytes)}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                AddStatus($"Read hata @ 0x{readAddress.ToString("X")} : {ex.Message}");
+                            }
+
+                            offset += step;
+                        }
+                    }
+
+                    long next = mbi.BaseAddress.ToInt64() + mbi.RegionSize.ToInt64();
+                    if (next >= long.MaxValue) break;
+                    address = new IntPtr(next);
+                }
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); }
+        }
+
+        private string FormatBytesAsDisplay(string type, byte[] data)
+        {
+            try
+            {
+                switch (type)
+                {
+                    case "Int8": return ((sbyte)data[0]).ToString();
+                    case "UInt8": return data[0].ToString();
+                    case "Int16": return BitConverter.ToInt16(data, 0).ToString();
+                    case "UInt16": return BitConverter.ToUInt16(data, 0).ToString();
+                    case "Int32": return BitConverter.ToInt32(data, 0).ToString();
+                    case "UInt32": return BitConverter.ToUInt32(data, 0).ToString();
+                    case "Int64": return BitConverter.ToInt64(data, 0).ToString();
+                    case "UInt64": return BitConverter.ToUInt64(data, 0).ToString();
+                    case "Float32": return BitConverter.ToSingle(data, 0).ToString(CultureInfo.InvariantCulture);
+                    case "Float64": return BitConverter.ToDouble(data, 0).ToString(CultureInfo.InvariantCulture);
+                    case "Bytes (Hex)": return "0x" + BitConverter.ToString(data).Replace("-", "");
+                    default: return BitConverter.ToString(data);
+                }
+            }
+            catch { return BitConverter.ToString(data); }
+        }
+
+        private async void btnRescan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string newValue = txtValue.Text; // user-entered new value
+
+            AddStatus("Tekrar taranıyor...");
+
+            await Task.Run(() => RescanAddresses(process, lastFoundAddresses.ToList(), newValue));
+            AddStatus("Tekrar tarama tamamlandı");
+        }
+
+        private void RescanAddresses(Process process, List<FoundAddress> addresses, string newValue)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: açılmadı"); return; }
+
+                ClearResults();
+                var remaining = new List<FoundAddress>();
+
+                foreach (var fa in addresses)
+                {
+                    // build bytes for this found subtype using newValue
+                    if (!GetBytesForType(fa.Subtype, newValue, out byte[] newBytes, out string err))
+                    {
+                        // cannot parse new value for this subtype -> treat as not matching
+                        continue;
+                    }
+
+                    byte[] buffer = new byte[newBytes.Length];
+                    IntPtr bytesRead;
+                    try
+                    {
+                        if (ReadProcessMemory(hProcess, fa.Address, buffer, buffer.Length, out bytesRead))
+                        {
+                            bool match;
+                            if (fa.Subtype.StartsWith("Float") && (fa.Subtype == "Float32" || fa.Subtype == "Float64"))
+                            {
+                                if (fa.Subtype == "Float32" && float.TryParse(newValue, NumberStyles.Float, CultureInfo.InvariantCulture, out float vf))
+                                {
+                                    float read = BitConverter.ToSingle(buffer, 0);
+                                    match = Math.Abs(read - vf) < 0.0001f;
+                                }
+                                else if (fa.Subtype == "Float64" && double.TryParse(newValue, NumberStyles.Float, CultureInfo.InvariantCulture, out double vd))
+                                {
+                                    double read = BitConverter.ToDouble(buffer, 0);
+                                    match = Math.Abs(read - vd) < 0.0000001;
+                                }
+                                else match = buffer.SequenceEqual(newBytes);
+                            }
+                            else
+                            {
+                                match = buffer.SequenceEqual(newBytes);
+                            }
+
+                            if (match)
+                            {
+                                remaining.Add(new FoundAddress { Address = fa.Address, Subtype = fa.Subtype, Value = newBytes });
+                                AddResult($"0x{fa.Address.ToString("X")} | {fa.Subtype} | {FormatBytesAsDisplay(fa.Subtype, buffer)} | {FormatBytesAsDisplay(fa.Subtype, fa.Value)}");
+                            }
+                        }
+                        else
+                        {
+                            AddResult($"0x{fa.Address.ToString("X")} - Okunamadı");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddResult($"0x{fa.Address.ToString("X")} - Hata: " + ex.Message);
+                    }
+                }
+
+                // update stored addresses
+                lastFoundAddresses = remaining;
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); }
+        }
+
+        private async void btnWrite_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string writeType = cbType.SelectedItem?.ToString() ?? "Int";
+            string writeValue = txtWriteValue.Text;
+
+            AddStatus("Belleğe yazma başlıyor...");
+
+            // For Int type writing, we'll default to Int32 representation of given value
+            byte[] data;
+            if (writeType == "Int")
+            {
+                if (!GetBytesForType("Int32", writeValue, out data, out string err)) { AddStatus(err); return; }
+            }
+            else
+            {
+                if (!GetBytesForType(writeType, writeValue, out data, out string err)) { AddStatus(err); return; }
+            }
+
+            await Task.Run(() => WriteToAddresses(process, lastFoundAddresses.ToList(), data));
+            AddStatus("Belleğe yazma tamamlandı");
+        }
+
+        private void WriteToAddresses(Process process, List<FoundAddress> addresses, byte[] data)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: yazma için açılamadı (izin yok)"); return; }
+
+                foreach (var fa in addresses)
+                {
+                    try
+                    {
+                        IntPtr written;
+                        bool ok = WriteProcessMemory(hProcess, fa.Address, data, data.Length, out written);
+                        if (ok) AddResult($"0x{fa.Address.ToString("X")} - Yazıldı ({written.ToInt32()} byte)"); else AddResult($"0x{fa.Address.ToString("X")} - Yazılamadı");
+                    }
+                    catch (Exception ex) { AddResult($"0x{fa.Address.ToString("X")} - Hata: " + ex.Message); }
+                }
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); }
+        }
+
+        private void ClearResults()
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated) return;
+                if (lstResults.InvokeRequired) { lstResults.BeginInvoke(new Action(() => { if (!lstResults.IsDisposed && lstResults.IsHandleCreated) lstResults.Items.Clear(); })); return; }
+                lstResults.Items.Clear();
+            }
+            catch { }
+        }
+
+        private void AddResult(string text)
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated) return;
+                if (lstResults.InvokeRequired) { lstResults.BeginInvoke(new Action(() => { if (!lstResults.IsDisposed && lstResults.IsHandleCreated) lstResults.Items.Add(text); })); return; }
+                lstResults.Items.Add(text);
+            }
+            catch { }
+        }
+
+        private void AddStatus(string text)
+        {
+            try
+            {
+                if (lblStatus == null || lblStatus.IsDisposed || !lblStatus.IsHandleCreated) return;
+                if (lblStatus.InvokeRequired) { lblStatus.BeginInvoke(new Action(() => { if (!lblStatus.IsDisposed && lblStatus.IsHandleCreated) lblStatus.Text = text; })); return; }
+                lblStatus.Text = text;
+            }
+            catch { }
+        }
+
+        class ProcessItem
+        {
+            public Process Process { get; set; }
+            public string Display { get; set; }
+            public override string ToString() { return Display; }
+        }
+
+        class FoundAddress
+        {
+            public IntPtr Address { get; set; }
+            public string Subtype { get; set; }
+            public byte[] Value { get; set; }
+        }
+    }
+}

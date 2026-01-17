@@ -1,0 +1,411 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
+using System.Numerics;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+
+namespace cheat_engine
+{
+    public partial class Form1 : Form
+    {
+        private List<IntPtr> lastFoundAddresses = new List<IntPtr>();
+        private string lastSearchType = "Int32";
+        private byte[] lastTarget = null;
+
+        public Form1()
+        {
+            InitializeComponent();
+        }
+
+        // P/Invoke
+        [DllImport("kernel32.dll")]
+        static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int nSize, out IntPtr lpNumberOfBytesWritten);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr hObject);
+
+        const int PROCESS_WM_READ = 0x0010;
+        const int PROCESS_QUERY_INFORMATION = 0x0400;
+        const int PROCESS_VM_OPERATION = 0x0008;
+        const int PROCESS_VM_WRITE = 0x0020;
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+        }
+
+        // Build bytes for a given type and input string
+        private bool GetBytesForType(string type, string text, out byte[] data, out string error)
+        {
+            data = null; error = null;
+            try
+            {
+                switch (type)
+                {
+                    case "Int8":
+                        if (sbyte.TryParse(text, out sbyte sbyteVal)) data = new byte[] { unchecked((byte)sbyteVal) }; else { error = "Geçersiz Int8"; return false; }
+                        break;
+                    case "UInt8":
+                        if (byte.TryParse(text, out byte byteVal)) data = new byte[] { byteVal }; else { error = "Geçersiz UInt8"; return false; }
+                        break;
+                    case "Int16":
+                        if (short.TryParse(text, out short shortVal)) data = BitConverter.GetBytes(shortVal); else { error = "Geçersiz Int16"; return false; }
+                        break;
+                    case "UInt16":
+                        if (ushort.TryParse(text, out ushort ushortVal)) data = BitConverter.GetBytes(ushortVal); else { error = "Geçersiz UInt16"; return false; }
+                        break;
+                    case "Int32":
+                        if (int.TryParse(text, out int int32Val)) data = BitConverter.GetBytes(int32Val); else { error = "Geçersiz Int32"; return false; }
+                        break;
+                    case "UInt32":
+                        if (uint.TryParse(text, out uint uint32Val)) data = BitConverter.GetBytes(uint32Val); else { error = "Geçersiz UInt32"; return false; }
+                        break;
+                    case "Int64":
+                        if (long.TryParse(text, out long int64Val)) data = BitConverter.GetBytes(int64Val); else { error = "Geçersiz Int64"; return false; }
+                        break;
+                    case "UInt64":
+                        if (ulong.TryParse(text, out ulong uint64Val)) data = BitConverter.GetBytes(uint64Val); else { error = "Geçersiz UInt64"; return false; }
+                        break;
+                    case "Int128":
+                    case "UInt128":
+                        {
+                            BigInteger val;
+                            string t = text.Trim();
+                            if (t.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                            {
+                                if (!BigInteger.TryParse(t.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out val)) { error = "Geçersiz hex 128-bit"; return false; }
+                            }
+                            else
+                            {
+                                if (!BigInteger.TryParse(t, out val)) { error = "Geçersiz 128-bit sayı"; return false; }
+                            }
+                            bool unsigned = type == "UInt128";
+                            if (unsigned && val.Sign < 0) { error = "UInt128 için negatif sayı girilemez"; return false; }
+                            byte[] raw = val.ToByteArray();
+                            byte fill = (unsigned || val.Sign >= 0) ? (byte)0x00 : (byte)0xFF;
+                            if (raw.Length > 16) { error = "128-bit sığmıyor"; return false; }
+                            data = new byte[16]; for (int k = 0; k < 16; k++) data[k] = fill; Array.Copy(raw, 0, data, 0, raw.Length);
+                        }
+                        break;
+                    case "Float32":
+                        if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float floatVal)) data = BitConverter.GetBytes(floatVal); else { error = "Geçersiz Float32"; return false; }
+                        break;
+                    case "Float64":
+                        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double doubleVal)) data = BitConverter.GetBytes(doubleVal); else { error = "Geçersiz Float64"; return false; }
+                        break;
+                    case "Bytes (Hex)":
+                        {
+                            string hex = text.Replace(" ", string.Empty).Replace("-", string.Empty);
+                            if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) hex = hex.Substring(2);
+                            if (hex.Length % 2 != 0) hex = "0" + hex;
+                            try
+                            {
+                                data = new byte[hex.Length / 2];
+                                for (int idx = 0; idx < data.Length; idx++) data[idx] = byte.Parse(hex.Substring(idx * 2, 2), NumberStyles.HexNumber);
+                            }
+                            catch { error = "Geçersiz hex bayt dizisi"; return false; }
+                        }
+                        break;
+                    default:
+                        error = "Bilinmeyen tip"; return false;
+                }
+                return true;
+            }
+            catch (Exception ex) { error = ex.Message; return false; }
+        }
+
+        private void RefreshProcessList()
+        {
+            try
+            {
+                cbProcesses.Items.Clear();
+                var procs = Process.GetProcesses().OrderBy(p => p.ProcessName).ToList();
+                foreach (var p in procs)
+                {
+                    try { cbProcesses.Items.Add(new ProcessItem { Process = p, Display = $"{p.ProcessName} ({p.Id})" }); }
+                    catch { }
+                }
+                if (cbProcesses.Items.Count > 0) cbProcesses.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Refresh hata: " + ex.Message);
+            }
+        }
+
+        private void btnRefresh_Click(object sender, EventArgs e) => RefreshProcessList();
+
+        private async void btnScan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (string.IsNullOrWhiteSpace(txtValue.Text)) { MessageBox.Show("Lütfen aranacak değeri girin."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string searchType = cbType.SelectedItem?.ToString() ?? "Int32";
+            string searchValue = txtValue.Text;
+
+            lstResults.Items.Clear();
+            lastFoundAddresses.Clear();
+            lastSearchType = searchType;
+            AddStatus("Tarama başlıyor...");
+
+            if (!GetBytesForType(searchType, searchValue, out byte[] target, out string err)) { AddStatus(err); return; }
+            lastTarget = target;
+
+            await Task.Run(() => ScanProcessAndStore(process, target));
+
+            AddStatus("Tamamlandı");
+        }
+
+        private void ScanProcessAndStore(Process process, byte[] target)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: açılmadı"); return; }
+
+                lastFoundAddresses.Clear();
+                ProcessModuleCollection modules = null;
+                try { modules = process.Modules; } catch (Exception ex) { AddStatus("Modüller okunamadı: " + ex.Message); }
+                if (modules == null) { CloseHandle(hProcess); return; }
+
+                int tlen = target.Length;
+                foreach (ProcessModule module in modules)
+                {
+                    IntPtr baseAddr = module.BaseAddress;
+                    int moduleSize = module.ModuleMemorySize;
+                    if (moduleSize <= 0 || moduleSize < tlen) continue;
+
+                    byte[] buffer = new byte[moduleSize];
+                    IntPtr bytesRead;
+                    try
+                    {
+                        if (ReadProcessMemory(hProcess, baseAddr, buffer, moduleSize, out bytesRead))
+                        {
+                            for (int i = 0; i <= moduleSize - tlen; i++)
+                            {
+                                bool ok = true;
+                                for (int j = 0; j < tlen; j++) if (buffer[i + j] != target[j]) { ok = false; break; }
+                                if (ok)
+                                {
+                                    IntPtr foundAddr = IntPtr.Add(baseAddr, i);
+                                    lastFoundAddresses.Add(foundAddr);
+                                    AddResult($"0x{foundAddr.ToString("X")} | {FormatBytesAsDisplay(lastSearchType, target)} | {FormatBytesAsDisplay(lastSearchType, target)}");
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex) { AddStatus("ReadProcessMemory hata: " + ex.Message); }
+                }
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); }
+        }
+
+        private string FormatBytesAsDisplay(string type, byte[] data)
+        {
+            try
+            {
+                switch (type)
+                {
+                    case "Int8": return ((sbyte)data[0]).ToString();
+                    case "UInt8": return data[0].ToString();
+                    case "Int16": return BitConverter.ToInt16(data, 0).ToString();
+                    case "UInt16": return BitConverter.ToUInt16(data, 0).ToString();
+                    case "Int32": return BitConverter.ToInt32(data, 0).ToString();
+                    case "UInt32": return BitConverter.ToUInt32(data, 0).ToString();
+                    case "Int64": return BitConverter.ToInt64(data, 0).ToString();
+                    case "UInt64": return BitConverter.ToUInt64(data, 0).ToString();
+                    case "Int128":
+                    case "UInt128":
+                        {
+                            var bi = new BigInteger(data.Concat(new byte[] { 0 }).ToArray());
+                            return bi.ToString();
+                        }
+                    case "Float32": return BitConverter.ToSingle(data, 0).ToString(CultureInfo.InvariantCulture);
+                    case "Float64": return BitConverter.ToDouble(data, 0).ToString(CultureInfo.InvariantCulture);
+                    case "Bytes (Hex)": return "0x" + BitConverter.ToString(data).Replace("-", "");
+                    default: return BitConverter.ToString(data);
+                }
+            }
+            catch { return BitConverter.ToString(data); }
+        }
+
+        private async void btnRescan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string newType = cbType.SelectedItem?.ToString() ?? "Int32";
+            string newValue = txtValue.Text;
+
+            AddStatus("Tekrar taranıyor...");
+            if (!GetBytesForType(newType, newValue, out byte[] newTarget, out string err)) { AddStatus(err); return; }
+
+            await Task.Run(() => RescanAddresses(process, lastFoundAddresses.ToList(), newTarget, newType));
+            AddStatus("Tekrar tarama tamamlandı");
+        }
+
+        private void RescanAddresses(Process process, List<IntPtr> addresses, byte[] target, string type)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: açılmadı"); return; }
+
+                ClearResults();
+                var remaining = new List<IntPtr>();
+                int len = target.Length;
+
+                foreach (var addr in addresses)
+                {
+                    byte[] buffer = new byte[len];
+                    IntPtr bytesRead;
+                    try
+                    {
+                        if (ReadProcessMemory(hProcess, addr, buffer, buffer.Length, out bytesRead))
+                        {
+                            bool match;
+                            if (type.StartsWith("Float") && (type == "Float32" || type == "Float64"))
+                            {
+                                if (type == "Float32" && float.TryParse(txtValue.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out float vf))
+                                {
+                                    float read = BitConverter.ToSingle(buffer, 0);
+                                    match = Math.Abs(read - vf) < 0.0001f;
+                                }
+                                else if (type == "Float64" && double.TryParse(txtValue.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out double vd))
+                                {
+                                    double read = BitConverter.ToDouble(buffer, 0);
+                                    match = Math.Abs(read - vd) < 0.0000001;
+                                }
+                                else match = buffer.SequenceEqual(target);
+                            }
+                            else
+                            {
+                                match = buffer.SequenceEqual(target);
+                            }
+
+                            // if matches, keep and show current/previous
+                            if (match)
+                            {
+                                remaining.Add(addr);
+                                AddResult($"0x{addr.ToString("X")} | {FormatBytesAsDisplay(type, buffer)} | {FormatBytesAsDisplay(lastSearchType, lastTarget ?? buffer)}");
+                            }
+                        }
+                        else
+                        {
+                            AddResult($"0x{addr.ToString("X")} - Okunamadı");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddResult($"0x{addr.ToString("X")} - Hata: " + ex.Message);
+                    }
+                }
+
+                // update stored addresses
+                lastFoundAddresses = remaining;
+                lastTarget = target;
+                lastSearchType = type;
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); }
+        }
+
+        private async void btnWrite_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string writeType = cbType.SelectedItem?.ToString() ?? "Int32";
+            string writeValue = txtWriteValue.Text;
+
+            AddStatus("Belleğe yazma başlıyor...");
+            if (!GetBytesForType(writeType, writeValue, out byte[] data, out string err)) { AddStatus(err); return; }
+
+            await Task.Run(() => WriteToAddresses(process, lastFoundAddresses.ToList(), data));
+            AddStatus("Belleğe yazma tamamlandı");
+        }
+
+        private void WriteToAddresses(Process process, List<IntPtr> addresses, byte[] data)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: yazma için açılamadı (izin yok)"); return; }
+
+                foreach (var addr in addresses)
+                {
+                    try
+                    {
+                        IntPtr written;
+                        bool ok = WriteProcessMemory(hProcess, addr, data, data.Length, out written);
+                        if (ok) AddResult($"0x{addr.ToString("X")} - Yazıldı ({written.ToInt32()} byte)"); else AddResult($"0x{addr.ToString("X")} - Yazılamadı");
+                    }
+                    catch (Exception ex) { AddResult($"0x{addr.ToString("X")} - Hata: " + ex.Message); }
+                }
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); }
+        }
+
+        private void ClearResults()
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated) return;
+                if (lstResults.InvokeRequired) { lstResults.BeginInvoke(new Action(() => { if (!lstResults.IsDisposed && lstResults.IsHandleCreated) lstResults.Items.Clear(); })); return; }
+                lstResults.Items.Clear();
+            }
+            catch { }
+        }
+
+        private void AddResult(string text)
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated) return;
+                if (lstResults.InvokeRequired) { lstResults.BeginInvoke(new Action(() => { if (!lstResults.IsDisposed && lstResults.IsHandleCreated) lstResults.Items.Add(text); })); return; }
+                lstResults.Items.Add(text);
+            }
+            catch { }
+        }
+
+        private void AddStatus(string text)
+        {
+            try
+            {
+                if (lblStatus == null || lblStatus.IsDisposed || !lblStatus.IsHandleCreated) return;
+                if (lblStatus.InvokeRequired) { lblStatus.BeginInvoke(new Action(() => { if (!lblStatus.IsDisposed && lblStatus.IsHandleCreated) lblStatus.Text = text; })); return; }
+                lblStatus.Text = text;
+            }
+            catch { }
+        }
+
+        class ProcessItem
+        {
+            public Process Process { get; set; }
+            public string Display { get; set; }
+            public override string ToString() { return Display; }
+        }
+    }
+}

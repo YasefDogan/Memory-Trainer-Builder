@@ -1,0 +1,8 @@
+﻿0xB7CE50 int32 "para"
+0xB7CE54 int32 "can"
+0xB7CE50 uint32 "deneme"
+0xB7CE54 uint32 "test"
+0xB7CE54 int64
+0xB7CE54 uint64
+0xBAA430 int32
+0xBAA430 uint32

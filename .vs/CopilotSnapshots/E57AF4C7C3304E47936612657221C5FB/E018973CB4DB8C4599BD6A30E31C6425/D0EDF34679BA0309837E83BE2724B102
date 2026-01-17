@@ -1,0 +1,302 @@
+﻿namespace cheat_engine
+{
+    partial class Form1
+    {
+        /// <summary>
+        ///Gerekli tasarımcı değişkeni.
+        /// </summary>
+        private System.ComponentModel.IContainer components = null;
+
+        /// <summary>
+        ///Kullanılan tüm kaynakları temizleyin.
+        /// </summary>
+        ///<param name="disposing">yönetilen kaynaklar dispose edilmeliyse doğru; aksi halde yanlış.</param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        #region Windows Form Designer üretilen kod
+
+        /// <summary>
+        /// Tasarımcı desteği için gerekli metot - bu metodun 
+        ///içeriğini kod düzenleyici ile değiştirmeyin.
+        /// </summary>
+        private void InitializeComponent()
+        {
+            this.components = new System.ComponentModel.Container();
+            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+            this.ClientSize = new System.Drawing.Size(800, 520);
+            this.Text = "Form1";
+
+            // Tab control
+            this.tabControlMain = new System.Windows.Forms.TabControl();
+            this.tabScan = new System.Windows.Forms.TabPage();
+            this.tabUpload = new System.Windows.Forms.TabPage();
+
+            // Controls (will be placed into tabScan)
+            this.cbProcesses = new System.Windows.Forms.ComboBox();
+            this.btnRefresh = new System.Windows.Forms.Button();
+            this.lblProcess = new System.Windows.Forms.Label();
+            this.lblValue = new System.Windows.Forms.Label();
+            this.txtValue = new System.Windows.Forms.TextBox();
+            this.cbType = new System.Windows.Forms.ComboBox();
+            this.btnScan = new System.Windows.Forms.Button();
+            this.lstResults = new System.Windows.Forms.ListBox();
+            this.lblStatus = new System.Windows.Forms.Label();
+            this.btnRescan = new System.Windows.Forms.Button();
+
+            // Write controls
+            this.lblWriteValue = new System.Windows.Forms.Label();
+            this.txtWriteValue = new System.Windows.Forms.TextBox();
+            this.btnWrite = new System.Windows.Forms.Button();
+
+            // Export button (kept in scan tab)
+            this.btnExport = new System.Windows.Forms.Button();
+
+            // Log textbox
+            this.txtLog = new System.Windows.Forms.TextBox();
+
+            // Upload tab controls - Process selection
+            this.cbProcessesUpload = new System.Windows.Forms.ComboBox();
+            this.btnRefreshUpload = new System.Windows.Forms.Button();
+            this.lblProcessUpload = new System.Windows.Forms.Label();
+
+            // Upload tab controls - File upload
+            this.lblUpload = new System.Windows.Forms.Label();
+            this.txtUploadPath = new System.Windows.Forms.TextBox();
+            this.btnBrowseUpload = new System.Windows.Forms.Button();
+            this.btnUpload = new System.Windows.Forms.Button();
+            this.openFileDialog1 = new System.Windows.Forms.OpenFileDialog();
+
+            // New: Load addresses and flow panel for per-address controls
+            this.btnLoadAddresses = new System.Windows.Forms.Button();
+            this.flpAddressesUpload = new System.Windows.Forms.FlowLayoutPanel();
+
+            // tabControlMain
+            this.tabControlMain.Location = new System.Drawing.Point(0, 0);
+            this.tabControlMain.Size = new System.Drawing.Size(800, 520);
+            this.tabControlMain.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom)
+                | System.Windows.Forms.AnchorStyles.Left)
+                | System.Windows.Forms.AnchorStyles.Right)));
+            this.tabControlMain.Controls.Add(this.tabScan);
+            this.tabControlMain.Controls.Add(this.tabUpload);
+
+            // tabScan
+            this.tabScan.Text = "Tarama";
+            this.tabScan.UseVisualStyleBackColor = true;
+
+            // tabUpload
+            this.tabUpload.Text = "İçe Aktar";
+            this.tabUpload.UseVisualStyleBackColor = true;
+
+            // cbProcesses
+            this.cbProcesses.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cbProcesses.Location = new System.Drawing.Point(12, 30);
+            this.cbProcesses.Size = new System.Drawing.Size(420, 21);
+
+            // btnRefresh
+            this.btnRefresh.Location = new System.Drawing.Point(440, 28);
+            this.btnRefresh.Size = new System.Drawing.Size(75, 23);
+            this.btnRefresh.Text = "Yenile";
+            this.btnRefresh.Click += new System.EventHandler(this.btnRefresh_Click);
+
+            // lblProcess
+            this.lblProcess.Location = new System.Drawing.Point(12, 9);
+            this.lblProcess.Size = new System.Drawing.Size(200, 15);
+            this.lblProcess.Text = "Process seçin:";
+
+            // lblValue
+            this.lblValue.Location = new System.Drawing.Point(12, 60);
+            this.lblValue.Size = new System.Drawing.Size(100, 15);
+            this.lblValue.Text = "Aranacak değer:";
+
+            // txtValue
+            this.txtValue.Location = new System.Drawing.Point(12, 80);
+            this.txtValue.Size = new System.Drawing.Size(200, 20);
+
+            // cbType
+            this.cbType.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cbType.Location = new System.Drawing.Point(220, 79);
+            this.cbType.Size = new System.Drawing.Size(150, 21);
+            this.cbType.Items.AddRange(new object[] { "Int", "Float32", "Float64", "Bytes (Hex)" });
+            this.cbType.SelectedIndex = 0; // Int by default
+
+            // btnScan
+            this.btnScan.Location = new System.Drawing.Point(380, 77);
+            this.btnScan.Size = new System.Drawing.Size(75, 23);
+            this.btnScan.Text = "Ara";
+            this.btnScan.Click += new System.EventHandler(this.btnScan_Click);
+
+            // lstResults
+            this.lstResults.Location = new System.Drawing.Point(12, 110);
+            this.lstResults.Size = new System.Drawing.Size(760, 260);
+
+            // btnRescan
+            this.btnRescan.Location = new System.Drawing.Point(12, 380);
+            this.btnRescan.Size = new System.Drawing.Size(90, 23);
+            this.btnRescan.Text = "Tekrar Ara";
+            this.btnRescan.Click += new System.EventHandler(this.btnRescan_Click);
+
+            // Write controls layout
+            this.lblWriteValue.Location = new System.Drawing.Point(110, 380);
+            this.lblWriteValue.Size = new System.Drawing.Size(120, 15);
+            this.lblWriteValue.Text = "Yazılacak değer (seçili):";
+
+            this.txtWriteValue.Location = new System.Drawing.Point(230, 378);
+            this.txtWriteValue.Size = new System.Drawing.Size(150, 20);
+
+            this.btnWrite.Location = new System.Drawing.Point(390, 376);
+            this.btnWrite.Size = new System.Drawing.Size(90, 23);
+            this.btnWrite.Text = "Değiştir";
+            this.btnWrite.Click += new System.EventHandler(this.btnWrite_Click);
+
+            // btnExport (kept in scan tab)
+            this.btnExport.Location = new System.Drawing.Point(490, 376);
+            this.btnExport.Size = new System.Drawing.Size(90, 23);
+            this.btnExport.Text = "Dışa Aktar";
+            this.btnExport.Click += new System.EventHandler(this.btnExport_Click);
+
+            // lblStatus
+            this.lblStatus.Location = new System.Drawing.Point(12, 410);
+            this.lblStatus.Size = new System.Drawing.Size(760, 23);
+            this.lblStatus.Text = "Hazır";
+
+            // txtLog
+            this.txtLog.Location = new System.Drawing.Point(12, 440);
+            this.txtLog.Size = new System.Drawing.Size(760, 70);
+            this.txtLog.Multiline = true;
+            this.txtLog.ScrollBars = System.Windows.Forms.ScrollBars.Vertical;
+            this.txtLog.ReadOnly = true;
+
+            // Add scan controls to tabScan
+            this.tabScan.Controls.Add(this.cbProcesses);
+            this.tabScan.Controls.Add(this.btnRefresh);
+            this.tabScan.Controls.Add(this.lblProcess);
+            this.tabScan.Controls.Add(this.lblValue);
+            this.tabScan.Controls.Add(this.txtValue);
+            this.tabScan.Controls.Add(this.cbType);
+            this.tabScan.Controls.Add(this.btnScan);
+            this.tabScan.Controls.Add(this.lstResults);
+            this.tabScan.Controls.Add(this.lblStatus);
+            this.tabScan.Controls.Add(this.btnRescan);
+            this.tabScan.Controls.Add(this.lblWriteValue);
+            this.tabScan.Controls.Add(this.txtWriteValue);
+            this.tabScan.Controls.Add(this.btnWrite);
+            this.tabScan.Controls.Add(this.btnExport);
+            this.tabScan.Controls.Add(this.txtLog);
+
+            // Upload tab controls layout - Process selection at top
+            this.lblProcessUpload.Location = new System.Drawing.Point(12, 9);
+            this.lblProcessUpload.Size = new System.Drawing.Size(200, 15);
+            this.lblProcessUpload.Text = "Process seçin:";
+
+            this.cbProcessesUpload.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cbProcessesUpload.Location = new System.Drawing.Point(12, 30);
+            this.cbProcessesUpload.Size = new System.Drawing.Size(420, 21);
+
+            this.btnRefreshUpload.Location = new System.Drawing.Point(440, 28);
+            this.btnRefreshUpload.Size = new System.Drawing.Size(75, 23);
+            this.btnRefreshUpload.Text = "Yenile";
+            this.btnRefreshUpload.Click += new System.EventHandler(this.btnRefreshUpload_Click);
+
+            // Upload tab controls layout - File upload moved down
+            this.lblUpload.Location = new System.Drawing.Point(12, 65);
+            this.lblUpload.Size = new System.Drawing.Size(120, 15);
+            this.lblUpload.Text = "Yüklenecek dosya:";
+
+            this.txtUploadPath.Location = new System.Drawing.Point(12, 85);
+            this.txtUploadPath.Size = new System.Drawing.Size(540, 20);
+            this.txtUploadPath.ReadOnly = true;
+
+            this.btnBrowseUpload.Location = new System.Drawing.Point(560, 83);
+            this.btnBrowseUpload.Size = new System.Drawing.Size(75, 23);
+            this.btnBrowseUpload.Text = "Gözat...";
+            this.btnBrowseUpload.Click += new System.EventHandler(this.btnBrowseUpload_Click);
+
+            this.btnUpload.Location = new System.Drawing.Point(645, 83);
+            this.btnUpload.Size = new System.Drawing.Size(90, 23);
+            this.btnUpload.Text = "Yükle";
+            this.btnUpload.Click += new System.EventHandler(this.btnUpload_Click);
+
+            // btnLoadAddresses - loads lastFoundAddresses into the flow panel
+            this.btnLoadAddresses.Location = new System.Drawing.Point(12, 115);
+            this.btnLoadAddresses.Size = new System.Drawing.Size(140, 23);
+            this.btnLoadAddresses.Text = "Adresleri Yükle";
+            this.btnLoadAddresses.Click += new System.EventHandler(this.btnLoadAddresses_Click);
+
+            // flpAddressesUpload
+            this.flpAddressesUpload.Location = new System.Drawing.Point(12, 145);
+            this.flpAddressesUpload.Size = new System.Drawing.Size(760, 300);
+            this.flpAddressesUpload.AutoScroll = true;
+            this.flpAddressesUpload.FlowDirection = System.Windows.Forms.FlowDirection.TopDown;
+            this.flpAddressesUpload.WrapContents = false;
+
+            // Add upload controls to tabUpload
+            this.tabUpload.Controls.Add(this.lblProcessUpload);
+            this.tabUpload.Controls.Add(this.cbProcessesUpload);
+            this.tabUpload.Controls.Add(this.btnRefreshUpload);
+            this.tabUpload.Controls.Add(this.lblUpload);
+            this.tabUpload.Controls.Add(this.txtUploadPath);
+            this.tabUpload.Controls.Add(this.btnBrowseUpload);
+            this.tabUpload.Controls.Add(this.btnUpload);
+            this.tabUpload.Controls.Add(this.btnLoadAddresses);
+            this.tabUpload.Controls.Add(this.flpAddressesUpload);
+
+            // Add tabControl to form
+            this.Controls.Add(this.tabControlMain);
+
+            // Form events
+            this.Load += new System.EventHandler(this.Form1_Load);
+        }
+
+        #endregion
+
+        private System.Windows.Forms.TabControl tabControlMain;
+        private System.Windows.Forms.TabPage tabScan;
+        private System.Windows.Forms.TabPage tabUpload;
+
+        private System.Windows.Forms.ComboBox cbProcesses;
+        private System.Windows.Forms.Button btnRefresh;
+        private System.Windows.Forms.Label lblProcess;
+        private System.Windows.Forms.Label lblValue;
+        private System.Windows.Forms.TextBox txtValue;
+        private System.Windows.Forms.ComboBox cbType;
+        private System.Windows.Forms.Button btnScan;
+        private System.Windows.Forms.ListBox lstResults;
+        private System.Windows.Forms.Label lblStatus;
+        private System.Windows.Forms.Button btnRescan;
+
+        // Write controls
+        private System.Windows.Forms.Label lblWriteValue;
+        private System.Windows.Forms.TextBox txtWriteValue;
+        private System.Windows.Forms.Button btnWrite;
+
+        // Export button
+        private System.Windows.Forms.Button btnExport;
+
+        // Log control
+        private System.Windows.Forms.TextBox txtLog;
+
+        // Upload controls - Process selection
+        private System.Windows.Forms.ComboBox cbProcessesUpload;
+        private System.Windows.Forms.Button btnRefreshUpload;
+        private System.Windows.Forms.Label lblProcessUpload;
+
+        // Upload controls - File upload
+        private System.Windows.Forms.Label lblUpload;
+        private System.Windows.Forms.TextBox txtUploadPath;
+        private System.Windows.Forms.Button btnBrowseUpload;
+        private System.Windows.Forms.Button btnUpload;
+        
+        // Address management
+        private System.Windows.Forms.Button btnLoadAddresses;
+        private System.Windows.Forms.FlowLayoutPanel flpAddressesUpload;
+        private System.Windows.Forms.OpenFileDialog openFileDialog1;
+    }
+}
+

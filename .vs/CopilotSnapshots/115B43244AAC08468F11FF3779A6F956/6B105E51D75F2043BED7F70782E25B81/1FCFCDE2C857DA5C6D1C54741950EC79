@@ -1,0 +1,1136 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using System.Runtime.CompilerServices;
+using System.Collections.Concurrent;
+using System.Threading;
+using System.IO;
+
+namespace cheat_engine
+{
+    public partial class Form1 : Form
+    {
+        private List<FoundAddress> lastFoundAddresses = new List<FoundAddress>();
+        private string lastSearchType = "Int";
+
+        // --- New fields for batched UI updates ---
+        private readonly ConcurrentQueue<string> _logQueue = new ConcurrentQueue<string>();
+        private readonly ConcurrentQueue<string> _resultQueue = new ConcurrentQueue<string>();
+        private volatile string _latestStatus = null;
+        private volatile bool _clearResultsRequested = false;
+        private readonly System.Windows.Forms.Timer _uiFlushTimer;
+        // ------------------------------------------
+
+        public Form1()
+        {
+            InitializeComponent();
+
+            // Setup UI flush timer to batch updates and avoid flooding the STA thread
+            _uiFlushTimer = new System.Windows.Forms.Timer();
+            _uiFlushTimer.Interval = 150; // ms - tune as needed
+            _uiFlushTimer.Tick += (s, e) => FlushUiQueues();
+            _uiFlushTimer.Start();
+            
+            // Apply dark theme
+            ApplyDarkTheme();
+        }
+
+        private void ApplyDarkTheme()
+        {
+            // Ana form renkleri
+            this.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            this.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+
+            // TabControl
+            tabControlMain.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+            
+            // Tarama sekmesi
+            tabScan.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+            ApplyDarkThemeToControls(tabScan);
+            
+            // İçe Aktar sekmesi
+            tabUpload.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+            ApplyDarkThemeToControls(tabUpload);
+            
+            // Özel renkler
+            lstResults.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            lstResults.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+            
+            txtLog.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            txtLog.ForeColor = System.Drawing.Color.FromArgb(180, 180, 180);
+            
+            txtLogUpload.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+            txtLogUpload.ForeColor = System.Drawing.Color.FromArgb(180, 180, 180);
+            
+            progressBarScan.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+            progressBarScan.ForeColor = System.Drawing.Color.FromArgb(0, 122, 204);
+            
+            flpAddressesUpload.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+        }
+
+        private void ApplyDarkThemeToControls(System.Windows.Forms.Control parent)
+        {
+            foreach (System.Windows.Forms.Control ctrl in parent.Controls)
+            {
+                if (ctrl is System.Windows.Forms.Button)
+                {
+                    var btn = (System.Windows.Forms.Button)ctrl;
+                    btn.BackColor = System.Drawing.Color.FromArgb(62, 62, 64);
+                    btn.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                    btn.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                    btn.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(80, 80, 80);
+                }
+                else if (ctrl is System.Windows.Forms.TextBox)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(51, 51, 55);
+                    ctrl.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                }
+                else if (ctrl is System.Windows.Forms.ComboBox)
+                {
+                    var cb = (System.Windows.Forms.ComboBox)ctrl;
+                    cb.BackColor = System.Drawing.Color.FromArgb(51, 51, 55);
+                    cb.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                    cb.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                }
+                else if (ctrl is System.Windows.Forms.Label)
+                {
+                    ctrl.BackColor = System.Drawing.Color.Transparent;
+                    ctrl.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                }
+                else if (ctrl is System.Windows.Forms.ListBox)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(30, 30, 30);
+                    ctrl.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                }
+                else if (ctrl is System.Windows.Forms.FlowLayoutPanel)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(37, 37, 38);
+                    ApplyDarkThemeToControls(ctrl);
+                }
+                else if (ctrl is System.Windows.Forms.Panel)
+                {
+                    ctrl.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+                    ApplyDarkThemeToControls(ctrl);
+                }
+            }
+        }
+
+        private void Form1_Load(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+            RefreshProcessListUpload();
+            LoadUploadedFiles();
+        }
+
+        private void RefreshProcessList()
+        {
+            try
+            {
+                cbProcesses.Items.Clear();
+                var procs = Process.GetProcesses().OrderBy(p => p.ProcessName).ToList();
+                foreach (var p in procs)
+                {
+                    try { cbProcesses.Items.Add(new ProcessItem { Process = p, Display = $"{p.ProcessName} ({p.Id})" }); }
+                    catch { }
+                }
+                if (cbProcesses.Items.Count > 0) cbProcesses.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Refresh hata: " + ex.Message);
+            }
+        }
+
+        private void RefreshProcessListUpload()
+        {
+            try
+            {
+                cbProcessesUpload.Items.Clear();
+                var procs = Process.GetProcesses().OrderBy(p => p.ProcessName).ToList();
+                foreach (var p in procs)
+                {
+                    try { cbProcessesUpload.Items.Add(new ProcessItem { Process = p, Display = $"{p.ProcessName} ({p.Id})" }); }
+                    catch { }
+                }
+                if (cbProcessesUpload.Items.Count > 0) cbProcessesUpload.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Refresh hata: " + ex.Message);
+            }
+        }
+
+        private void btnRefresh_Click(object sender, EventArgs e)
+        {
+            RefreshProcessList();
+        }
+
+        private void btnRefreshUpload_Click(object sender, EventArgs e)
+        {
+            RefreshProcessListUpload();
+        }
+
+        // P/Invoke declarations
+        [DllImport("kernel32.dll")]
+        static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool ReadProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, [Out] byte[] lpBuffer, int dwSize, out IntPtr lpNumberOfBytesRead);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool WriteProcessMemory(IntPtr hProcess, IntPtr lpBaseAddress, byte[] lpBuffer, int nSize, out IntPtr lpNumberOfBytesWritten);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern UIntPtr VirtualQueryEx(IntPtr hProcess, IntPtr lpAddress, out MEMORY_BASIC_INFORMATION lpBuffer, UIntPtr dwLength);
+
+        [DllImport("kernel32.dll")]
+        static extern bool CloseHandle(IntPtr hObject);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MEMORY_BASIC_INFORMATION
+        {
+            public IntPtr BaseAddress;
+            public IntPtr AllocationBase;
+            public uint AllocationProtect;
+            public IntPtr RegionSize;
+            public uint State;
+            public uint Protect;
+            public uint Type;
+        }
+
+        const int PROCESS_WM_READ = 0x0010;
+        const int PROCESS_QUERY_INFORMATION = 0x0400;
+        const int PROCESS_VM_OPERATION = 0x0008;
+        const int PROCESS_VM_WRITE = 0x0020;
+        const uint MEM_COMMIT = 0x1000;
+        const uint PAGE_NOACCESS = 0x01;
+        const uint PAGE_GUARD = 0x100;
+        const uint PAGE_READWRITE = 0x04;
+        const uint PAGE_WRITECOPY = 0x08;
+        const uint PAGE_EXECUTE_READWRITE = 0x40;
+        const uint PAGE_EXECUTE_WRITECOPY = 0x80;
+
+        // Build bytes for given subtype
+        private bool GetBytesForType(string type, string text, out byte[] data, out string error)
+        {
+            data = null; error = null;
+            try
+            {
+                switch (type)
+                {
+                    case "Int8":
+                        if (sbyte.TryParse(text, out sbyte sbyteVal)) data = new byte[] { unchecked((byte)sbyteVal) }; else { error = "Geçersiz Int8"; return false; }
+                        break;
+                    case "UInt8":
+                        if (byte.TryParse(text, out byte byteVal)) data = new byte[] { byteVal }; else { error = "Geçersiz UInt8"; return false; }
+                        break;
+                    case "Int16":
+                        if (short.TryParse(text, out short shortVal)) data = BitConverter.GetBytes(shortVal); else { error = "Geçersiz Int16"; return false; }
+                        break;
+                    case "UInt16":
+                        if (ushort.TryParse(text, out ushort ushortVal)) data = BitConverter.GetBytes(ushortVal); else { error = "Geçersiz UInt16"; return false; }
+                        break;
+                    case "Int32":
+                        if (int.TryParse(text, out int int32Val)) data = BitConverter.GetBytes(int32Val); else { error = "Geçersiz Int32"; return false; }
+                        break;
+                    case "UInt32":
+                        if (uint.TryParse(text, out uint uint32Val)) data = BitConverter.GetBytes(uint32Val); else { error = "Geçersiz UInt32"; return false; }
+                        break;
+                    case "Int64":
+                        if (long.TryParse(text, out long int64Val)) data = BitConverter.GetBytes(int64Val); else { error = "Geçersiz Int64"; return false; }
+                        break;
+                    case "UInt64":
+                        if (ulong.TryParse(text, out ulong uint64Val)) data = BitConverter.GetBytes(uint64Val); else { error = "Geçersiz UInt64"; return false; }
+                        break;
+                    case "Float32":
+                        if (float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out float floatVal)) data = BitConverter.GetBytes(floatVal); else { error = "Geçersiz Float32"; return false; }
+                        break;
+                    case "Float64":
+                        if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out double doubleVal)) data = BitConverter.GetBytes(doubleVal); else { error = "Geçersiz Float64"; return false; }
+                        break;
+                    case "Bytes (Hex)":
+                        {
+                            string hex = text.Replace(" ", string.Empty).Replace("-", string.Empty);
+                            if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) hex = hex.Substring(2);
+                            if (hex.Length % 2 != 0) hex = "0" + hex;
+                            try
+                            {
+                                data = new byte[hex.Length / 2];
+                                for (int idx = 0; idx < data.Length; idx++) data[idx] = byte.Parse(hex.Substring(idx * 2, 2), NumberStyles.HexNumber);
+                            }
+                            catch { error = "Geçersiz hex bayt dizisi"; return false; }
+                        }
+                        break;
+                    default:
+                        error = "Bilinmeyen tip"; return false;
+                }
+                return true;
+            }
+            catch (Exception ex) { error = ex.Message; return false; }
+        }
+
+        // For 'Int' search build multiple subtypes
+        private List<(string subtype, byte[] bytes)> BuildTargets(string type, string valueText, out string error)
+        {
+            error = null;
+            var list = new List<(string, byte[])>();
+            if (type == "Int")
+            {
+                string[] intSubtypes = new[] { "Int8", "UInt8", "Int16", "UInt16", "Int32", "UInt32", "Int64", "UInt64" };
+                foreach (var s in intSubtypes)
+                {
+                    if (GetBytesForType(s, valueText, out byte[] bytes, out string err)) list.Add((s, bytes));
+                }
+                if (!list.Any()) error = "Geçersiz Int değeri";
+                return list;
+            }
+            else
+            {
+                if (GetBytesForType(type, valueText, out byte[] bytes, out string err)) list.Add((type, bytes)); else error = err;
+                return list;
+            }
+        }
+
+        private async void btnScan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (string.IsNullOrWhiteSpace(txtValue.Text)) { MessageBox.Show("Lütfen aranacak değeri girin."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string searchType = cbType.SelectedItem?.ToString() ?? "Int";
+            string searchValue = txtValue.Text;
+
+            lstResults.Items.Clear();
+            lastFoundAddresses.Clear();
+            lastSearchType = searchType;
+            
+            // Progress bar'ı sıfırla
+            progressBarScan.Value = 0;
+            progressBarScan.Maximum = 100;
+            
+            AddStatus("Tarama başlıyor...");
+
+            var targets = BuildTargets(searchType, searchValue, out string buildErr);
+            if (buildErr != null) { AddStatus(buildErr); return; }
+
+            var progress = new Progress<int>(percent => 
+            {
+                if (progressBarScan != null && !progressBarScan.IsDisposed)
+                    progressBarScan.Value = Math.Min(percent, 100);
+            });
+
+            await Task.Run(() => ScanProcessAndStore(process, targets, progress));
+
+            progressBarScan.Value = 100;
+            AddStatus("Tamamlandı");
+        }
+
+        // region-based scan with overlap
+        private void ScanProcessAndStore(Process process, List<(string subtype, byte[] bytes)> targets, IProgress<int> progress = null)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: açılmadı"); AppendLog("OpenProcess returned zero."); return; }
+
+                lastFoundAddresses.Clear();
+
+                IntPtr address = IntPtr.Zero;
+                int structSize = Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION));
+
+                int maxTlen = 0; foreach (var t in targets) if (t.bytes != null && t.bytes.Length > maxTlen) maxTlen = t.bytes.Length;
+                if (maxTlen <= 0) { AddStatus("Aranacak hedef boş"); CloseHandle(hProcess); return; }
+                int overlap = Math.Max(0, maxTlen - 1);
+
+                int totalMatches = 0;
+
+                // İlk geçiş: toplam taranacak bellek boyutunu hesapla
+                long totalMemoryToScan = 0;
+                var regionsToScan = new List<(IntPtr baseAddr, long size)>();
+                IntPtr tempAddr = IntPtr.Zero;
+                
+                while (true)
+                {
+                    MEMORY_BASIC_INFORMATION mbi;
+                    var res = VirtualQueryEx(hProcess, tempAddr, out mbi, (UIntPtr)structSize);
+                    if (res == UIntPtr.Zero) break;
+
+                    long regionSize = mbi.RegionSize.ToInt64();
+                    bool isCommitted = (mbi.State & MEM_COMMIT) != 0;
+                    bool noAccess = (mbi.Protect & PAGE_NOACCESS) != 0;
+                    bool guard = (mbi.Protect & PAGE_GUARD) != 0;
+                    bool isReadable = isCommitted && !noAccess && !guard;
+
+                    if (isReadable)
+                    {
+                        uint prot = mbi.Protect;
+                        bool writable = ((prot & PAGE_READWRITE) != 0) || ((prot & PAGE_WRITECOPY) != 0) || ((prot & PAGE_EXECUTE_READWRITE) != 0) || ((prot & PAGE_EXECUTE_WRITECOPY) != 0);
+                        if (writable && regionSize > 0)
+                        {
+                            regionsToScan.Add((mbi.BaseAddress, regionSize));
+                            totalMemoryToScan += regionSize;
+                        }
+                    }
+
+                    long next = mbi.BaseAddress.ToInt64() + mbi.RegionSize.ToInt64();
+                    if (next >= long.MaxValue) break;
+                    tempAddr = new IntPtr(next);
+                }
+
+                // İkinci geçiş: tarama yap ve progress güncelle
+                long scannedMemory = 0;
+                int lastPercent = 0;
+
+                foreach (var region in regionsToScan)
+                {
+                    long regionSize = region.size;
+                    long offset = 0;
+                    const int chunk = 0x10000; // 64KB
+                    int step = Math.Max(1, chunk - overlap);
+
+                    while (offset < regionSize)
+                    {
+                        int toRead = (int)Math.Min(chunk, regionSize - offset);
+                        byte[] buffer = new byte[toRead];
+                        IntPtr bytesRead;
+                        IntPtr readAddress = new IntPtr(region.baseAddr.ToInt64() + offset);
+                        
+                        try
+                        {
+                            bool okRead = ReadProcessMemory(hProcess, readAddress, buffer, toRead, out bytesRead);
+                            if (okRead)
+                            {
+                                int actualRead = bytesRead.ToInt32();
+                                if (actualRead > 0)
+                                {
+                                    foreach (var t in targets)
+                                    {
+                                        int tlen = t.bytes.Length;
+                                        if (tlen == 0 || actualRead < tlen) continue;
+                                        for (int i = 0; i <= actualRead - tlen; i++)
+                                        {
+                                            bool ok = true;
+                                            for (int j = 0; j < tlen; j++) if (buffer[i + j] != t.bytes[j]) { ok = false; break; }
+                                            if (ok)
+                                            {
+                                                long foundAddrInt = region.baseAddr.ToInt64() + offset + i;
+                                                IntPtr foundAddr = new IntPtr(foundAddrInt);
+                                                lastFoundAddresses.Add(new FoundAddress { Address = foundAddr, Subtype = t.subtype, Value = t.bytes });
+                                                totalMatches++;
+                                                AddResult($"0x{foundAddr.ToString("X")} | {t.subtype} | {FormatBytesAsDisplay(t.subtype, t.bytes)}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        catch { }
+
+                        offset += step;
+                        scannedMemory += step;
+
+                        // Progress güncelle
+                        if (totalMemoryToScan > 0 && progress != null)
+                        {
+                            int percent = (int)((scannedMemory * 100) / totalMemoryToScan);
+                            if (percent > lastPercent)
+                            {
+                                lastPercent = percent;
+                                progress.Report(Math.Min(percent, 99));
+                            }
+                        }
+                    }
+                }
+
+                AppendLog($"Tarama tamamlandı: {regionsToScan.Count} bölge, {totalMatches} eşleşme");
+                progress?.Report(100);
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); AppendLog("ScanProcessAndStore exception: " + ex.Message); }
+        }
+
+        // Duplicate UI batching methods removed; single definitions exist later in the file.
+
+        private async void btnRescan_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string newValue = txtValue.Text; // user-entered new value
+
+            AddStatus("Tekrar taranıyor...");
+
+            await Task.Run(() => RescanAddresses(process, lastFoundAddresses.ToList(), newValue));
+            AddStatus("Tekrar tarama tamamlandı");
+        }
+
+        private void RescanAddresses(Process process, List<FoundAddress> addresses, string newValue)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: açılmadı"); AppendLog("OpenProcess returned zero for rescan."); return; }
+
+                ClearResults();
+                var remaining = new List<FoundAddress>();
+
+                foreach (var fa in addresses)
+                {
+                    if (!GetBytesForType(fa.Subtype, newValue, out byte[] newBytes, out string err)) { AppendLog($"Parse new value for subtype {fa.Subtype} failed: {err}"); continue; }
+
+                    byte[] buffer = new byte[newBytes.Length];
+                    IntPtr bytesRead;
+                    try
+                    {
+                        bool okRead = ReadProcessMemory(hProcess, fa.Address, buffer, buffer.Length, out bytesRead);
+                        if (!okRead)
+                        {
+                            int errc = Marshal.GetLastWin32Error();
+                            AppendLog($"Rescan ReadProcessMemory failed at 0x{fa.Address.ToString("X")}, Err={errc}");
+                            continue;
+                        }
+
+                        int actualRead = bytesRead.ToInt32();
+                        AppendLog($"Rescan read {actualRead} bytes at 0x{fa.Address.ToString("X")} subtype={fa.Subtype}");
+
+                        bool match = buffer.SequenceEqual(newBytes);
+                        if (match)
+                        {
+                            remaining.Add(new FoundAddress { Address = fa.Address, Subtype = fa.Subtype, Value = newBytes });
+                            AddResult($"0x{fa.Address.ToString("X")} | {fa.Subtype} | {FormatBytesAsDisplay(fa.Subtype, buffer)} | {FormatBytesAsDisplay(fa.Subtype, fa.Value)}");
+                            AppendLog($"Rescan match at 0x{fa.Address.ToString("X")}\n");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AppendLog($"Exception in rescan reading 0x{fa.Address.ToString("X")}: {ex.Message}");
+                    }
+                }
+
+                lastFoundAddresses = remaining;
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); AppendLog("RescanAddresses exception: " + ex.Message); }
+        }
+
+        private async void btnWrite_Click(object sender, EventArgs e)
+        {
+            if (cbProcesses.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+            if (!lastFoundAddresses.Any()) { MessageBox.Show("Önce bir tarama yapın."); return; }
+
+            var item = cbProcesses.SelectedItem as ProcessItem;
+            var process = item.Process;
+            string writeType = cbType.SelectedItem?.ToString() ?? "Int";
+            string writeValue = txtWriteValue.Text;
+
+            AddStatus("Belleğe yazma başlıyor...");
+            byte[] data;
+            if (writeType == "Int")
+            {
+                if (!GetBytesForType("Int32", writeValue, out data, out string err)) { AddStatus(err); return; }
+            }
+            else
+            {
+                if (!GetBytesForType(writeType, writeValue, out data, out string err)) { AddStatus(err); return; }
+            }
+
+            await Task.Run(() => WriteToAddresses(process, lastFoundAddresses.ToList(), data));
+            AddStatus("Belleğe yazma tamamlandı");
+        }
+
+        // In WriteToAddresses, log write results
+        private void WriteToAddresses(Process process, List<FoundAddress> addresses, byte[] data)
+        {
+            try
+            {
+                IntPtr hProcess = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AddStatus($"{process.ProcessName}: yazma için açılamadı (izin yok)"); AppendLog("OpenProcess for write failed."); return; }
+
+                foreach (var fa in addresses)
+                {
+                    try
+                    {
+                        IntPtr written;
+                        bool ok = WriteProcessMemory(hProcess, fa.Address, data, data.Length, out written);
+                        if (ok) { AddResult($"0x{fa.Address.ToString("X")} - Yazıldı ({written.ToInt32()} byte)"); AppendLog($"Wrote {written.ToInt32()} bytes to 0x{fa.Address.ToString("X")}."); }
+                        else { AddResult($"0x{fa.Address.ToString("X")} - Yazılamadı"); int err = Marshal.GetLastWin32Error(); AppendLog($"WriteProcessMemory failed at 0x{fa.Address.ToString("X")} Err={err}"); }
+                    }
+                    catch (Exception ex) { AddResult($"0x{fa.Address.ToString("X")} - Hata: " + ex.Message); AppendLog($"Exception writing to 0x{fa.Address.ToString("X")} : {ex.Message}"); }
+                }
+
+                CloseHandle(hProcess);
+            }
+            catch (Exception ex) { AddStatus("Hata: " + ex.Message); AppendLog("WriteToAddresses exception: " + ex.Message); }
+        }
+
+        private string FormatBytesAsDisplay(string type, byte[] data)
+        {
+            try
+            {
+                switch (type)
+                {
+                    case "Int8": return ((sbyte)data[0]).ToString();
+                    case "UInt8": return data[0].ToString();
+                    case "Int16": return BitConverter.ToInt16(data, 0).ToString();
+                    case "UInt16": return BitConverter.ToUInt16(data, 0).ToString();
+                    case "Int32": return BitConverter.ToInt32(data, 0).ToString();
+                    case "UInt32": return BitConverter.ToUInt32(data, 0).ToString();
+                    case "Int64": return BitConverter.ToInt64(data, 0).ToString();
+                    case "UInt64": return BitConverter.ToUInt64(data, 0).ToString();
+                    case "Float32": return BitConverter.ToSingle(data, 0).ToString(CultureInfo.InvariantCulture);
+                    case "Float64": return BitConverter.ToDouble(data, 0).ToString(CultureInfo.InvariantCulture);
+                    case "Bytes (Hex)": return "0x" + BitConverter.ToString(data).Replace("-", "");
+                    default: return BitConverter.ToString(data);
+                }
+            }
+            catch { return BitConverter.ToString(data); }
+        }
+
+        // Upload/load addresses UI
+        private void btnBrowseUpload_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (openFileDialog1 == null) openFileDialog1 = new OpenFileDialog();
+                openFileDialog1.Multiselect = false;
+                openFileDialog1.Filter = "Tüm dosyalar (*.*)|*.*";
+                if (openFileDialog1.ShowDialog() == DialogResult.OK)
+                {
+                    string selected = openFileDialog1.FileName;
+                    if (txtUploadPath != null && !txtUploadPath.IsDisposed && txtUploadPath.IsHandleCreated)
+                    {
+                        try { txtUploadPath.Invoke((Action)(() => txtUploadPath.Text = selected)); } catch { txtUploadPath.Text = selected; }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Dosya seçme hatası: " + ex.Message);
+                AppendLog("Browse error: " + ex.Message);
+            }
+        }
+
+        private void btnUpload_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                string source = (txtUploadPath != null) ? txtUploadPath.Text : null;
+                if (string.IsNullOrWhiteSpace(source) || !File.Exists(source))
+                {
+                    MessageBox.Show("Lütfen yüklemek için bir dosya seçin.");
+                    return;
+                }
+
+                string uploadsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uploads");
+                Directory.CreateDirectory(uploadsDir);
+
+                string destFileName = Path.GetFileName(source);
+                string destPath = Path.Combine(uploadsDir, destFileName);
+
+                File.Copy(source, destPath, true);
+
+                AddStatus("Dosya yüklendi: " + destFileName);
+                AppendLog($"Uploaded file {source} -> {destPath}");
+
+                MessageBox.Show("Dosya başarıyla yüklendi:\n" + destPath);
+
+                // after upload, load addresses from file
+                try { LoadAddressesFromFile(destPath); } catch (Exception ex) { AppendLog("LoadAddressesFromFile error: " + ex.Message); }
+            }
+            catch (Exception ex)
+            {
+                AddStatus("Yükleme hatası: " + ex.Message);
+                AppendLog("Upload error: " + ex.Message);
+                MessageBox.Show("Yükleme sırasında hata: " + ex.Message);
+            }
+        }
+
+        private void LoadUploadedFiles()
+        {
+            try
+            {
+                string uploadsDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "uploads");
+                if (!Directory.Exists(uploadsDir)) Directory.CreateDirectory(uploadsDir);
+            }
+            catch { }
+        }
+
+        private void LoadAddressesFromFile(string path)
+        {
+            if (!File.Exists(path)) return;
+            var lines = File.ReadAllLines(path);
+            var parsed = new List<(IntPtr addr, string subtype, string name)>();
+            
+            foreach (var ln in lines)
+            {
+                var s = ln.Trim();
+                if (string.IsNullOrEmpty(s)) continue;
+                
+                try
+                {
+                    string addrPart = "";
+                    string typePart = "Int32";
+                    string namePart = "";
+                    
+                    // Format: 0xADDRESS TYPE "NAME"
+                    // Quote içindeki ismi çıkar
+                    int quoteStart = s.IndexOf('"');
+                    if (quoteStart >= 0)
+                    {
+                        int quoteEnd = s.LastIndexOf('"');
+                        if (quoteEnd > quoteStart)
+                        {
+                            namePart = s.Substring(quoteStart + 1, quoteEnd - quoteStart - 1);
+                            s = s.Substring(0, quoteStart).Trim();
+                        }
+                    }
+                    
+                    var parts = s.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length < 1) continue;
+                    
+                    addrPart = parts[0];
+                    if (parts.Length >= 2) typePart = parts[1];
+                    
+                    if (addrPart.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) 
+                        addrPart = addrPart.Substring(2);
+                    
+                    long val = long.Parse(addrPart, System.Globalization.NumberStyles.HexNumber);
+                    IntPtr addr = new IntPtr(val);
+                    string subtype = MapShortToSubtype(typePart);
+
+                    if (string.IsNullOrEmpty(namePart))
+                        namePart = $"Address_{addr.ToString("X")}";
+                    
+                    parsed.Add((addr, subtype, namePart));
+                }
+                catch (Exception ex) { AppendLog("Parse line failed: " + ln + " -> " + ex.Message); }
+            }
+
+            if (flpAddressesUpload == null || flpAddressesUpload.IsDisposed) return;
+            flpAddressesUpload.Controls.Clear();
+
+            foreach (var p in parsed)
+            {
+                var fa = new FoundAddress { Address = p.addr, Subtype = p.subtype, Value = null, Name = p.name };
+                CreateAddressRow(fa);
+            }
+        }
+
+        private void CreateAddressRow(FoundAddress fa)
+        {
+            try
+            {
+                var panel = new Panel();
+                panel.Width = flpAddressesUpload.ClientSize.Width - 25;
+                panel.Height = 36;
+                panel.BackColor = System.Drawing.Color.FromArgb(45, 45, 48);
+
+                var lbl = new Label();
+                lbl.Text = $"0x{fa.Address.ToString("X")}";
+                lbl.AutoSize = false;
+                lbl.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+                lbl.Location = new System.Drawing.Point(3, 6);
+                lbl.Size = new System.Drawing.Size(120, 24);
+                lbl.BackColor = System.Drawing.Color.Transparent;
+                lbl.ForeColor = System.Drawing.Color.FromArgb(220, 220, 220);
+                panel.Controls.Add(lbl);
+
+                var txt = new TextBox();
+                txt.Name = "txtAddrVal_" + fa.Address.ToString("X");
+                txt.Location = new System.Drawing.Point(130, 6);
+                txt.Size = new System.Drawing.Size(240, 22);
+                txt.BackColor = System.Drawing.Color.FromArgb(51, 51, 55);
+                txt.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                txt.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
+                panel.Controls.Add(txt);
+
+                var btnRead = new Button();
+                btnRead.Text = "Oku";
+                btnRead.Location = new System.Drawing.Point(380, 5);
+                btnRead.Size = new System.Drawing.Size(60, 24);
+                btnRead.BackColor = System.Drawing.Color.FromArgb(62, 62, 64);
+                btnRead.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                btnRead.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                btnRead.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(80, 80, 80);
+                btnRead.Tag = new Tuple<FoundAddress, TextBox>(fa, txt);
+                btnRead.Click += (s, e) =>
+                {
+                    try
+                    {
+                        var tup = (Tuple<FoundAddress, TextBox>)((Button)s).Tag;
+                        var val = ReadAddressValue(tup.Item1);
+                        if (val != null) tup.Item2.Text = val;
+                    }
+                    catch (Exception ex) { AppendLog("Read button error: " + ex.Message); }
+                };
+                panel.Controls.Add(btnRead);
+
+                var btnWriteSingle = new Button();
+                btnWriteSingle.Text = "Yaz";
+                btnWriteSingle.Location = new System.Drawing.Point(450, 5);
+                btnWriteSingle.Size = new System.Drawing.Size(60, 24);
+                btnWriteSingle.BackColor = System.Drawing.Color.FromArgb(62, 62, 64);
+                btnWriteSingle.ForeColor = System.Drawing.Color.FromArgb(241, 241, 241);
+                btnWriteSingle.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
+                btnWriteSingle.FlatAppearance.BorderColor = System.Drawing.Color.FromArgb(80, 80, 80);
+                btnWriteSingle.Tag = new Tuple<FoundAddress, TextBox>(fa, txt);
+                btnWriteSingle.Click += (s, e) =>
+                {
+                    try
+                    {
+                        var tup = (Tuple<FoundAddress, TextBox>)((Button)s).Tag;
+                        ApplyAddressValue(tup.Item1, tup.Item2.Text);
+                    }
+                    catch (Exception ex) { AppendLog("Write button error: " + ex.Message); }
+                };
+                panel.Controls.Add(btnWriteSingle);
+
+                flpAddressesUpload.Controls.Add(panel);
+            }
+            catch (Exception ex) { AppendLog("CreateAddressRow error: " + ex.Message); }
+        }
+
+        private string ReadAddressValue(FoundAddress fa)
+        {
+            try
+            {
+                if (cbProcessesUpload.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return null; }
+                var item = cbProcessesUpload.SelectedItem as ProcessItem;
+                if (item == null) { MessageBox.Show("Geçersiz process."); return null; }
+                
+                Process process;
+                try { process = Process.GetProcessById(item.Process.Id); }
+                catch { MessageBox.Show("Process çalışmıyor. Yenileyin."); return null; }
+
+                IntPtr hProcess = OpenProcess(PROCESS_WM_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AppendLog($"OpenProcess fail Err={Marshal.GetLastWin32Error()}"); return null; }
+                try
+                {
+                    int len = 4;
+                    switch (fa.Subtype) { case "Int8": case "UInt8": len = 1; break; case "Int16": case "UInt16": len = 2; break; case "Int64": case "UInt64": case "Float64": len = 8; break; }
+                    
+                    MEMORY_BASIC_INFORMATION mbi;
+                    var res = VirtualQueryEx(hProcess, fa.Address, out mbi, (UIntPtr)Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION)));
+                    if (res == UIntPtr.Zero) { AppendLog($"VirtualQueryEx fail"); return null; }
+                    if ((mbi.State & MEM_COMMIT) == 0 || (mbi.Protect & PAGE_NOACCESS) != 0 || (mbi.Protect & PAGE_GUARD) != 0) return null;
+                    
+                    byte[] buffer = new byte[len];
+                    IntPtr bytesRead;
+                    if (!ReadProcessMemory(hProcess, fa.Address, buffer, len, out bytesRead)) { AppendLog($"Read fail Err={Marshal.GetLastWin32Error()}"); return null; }
+                    if (bytesRead.ToInt32() <= 0) return null;
+                    
+                    switch (fa.Subtype)
+                    {
+                        case "Int8": return ((sbyte)buffer[0]).ToString();
+                        case "UInt8": return buffer[0].ToString();
+                        case "Int16": return BitConverter.ToInt16(buffer, 0).ToString();
+                        case "UInt16": return BitConverter.ToUInt16(buffer, 0).ToString();
+                        case "Int32": return BitConverter.ToInt32(buffer, 0).ToString();
+                        case "UInt32": return BitConverter.ToUInt32(buffer, 0).ToString();
+                        case "Int64": return BitConverter.ToInt64(buffer, 0).ToString();
+                        case "UInt64": return BitConverter.ToUInt64(buffer, 0).ToString();
+                        case "Float32": return BitConverter.ToSingle(buffer, 0).ToString(CultureInfo.InvariantCulture);
+                        case "Float64": return BitConverter.ToDouble(buffer, 0).ToString(CultureInfo.InvariantCulture);
+                        default: return BitConverter.ToString(buffer);
+                    }
+                }
+                finally { CloseHandle(hProcess); }
+            }
+            catch (Exception ex) { AppendLog("ReadAddressValue: " + ex.Message); return null; }
+        }
+
+        private string MapShortToSubtype(string shortType)
+        {
+            if (string.IsNullOrEmpty(shortType)) return "Int32";
+            shortType = shortType.Trim().ToLowerInvariant();
+            switch (shortType)
+            {
+                case "int8": return "Int8";
+                case "uint8": return "UInt8";
+                case "int16": return "Int16";
+                case "uint16": return "UInt16";
+                case "int32": case "int": return "Int32";
+                case "uint32": return "UInt32";
+                case "int64": return "Int64";
+                case "uint64": return "UInt64";
+                case "float": case "float32": return "Float32";
+                case "double": case "float64": return "Float64";
+                case "bytes": case "hex": case "bytes(hex)": return "Bytes (Hex)";
+                default: return shortType;
+            }
+        }
+
+        // Apply a single address write from UI
+        private void ApplyAddressValue(FoundAddress fa, string newValueText)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(newValueText)) { MessageBox.Show("Lütfen bir değer girin."); return; }
+                if (!GetBytesForType(fa.Subtype, newValueText, out byte[] bytes, out string err)) { MessageBox.Show("Parse hatası: " + err); return; }
+                if (cbProcessesUpload.SelectedItem == null) { MessageBox.Show("Lütfen bir process seçin."); return; }
+                
+                var item = cbProcessesUpload.SelectedItem as ProcessItem;
+                if (item == null) { MessageBox.Show("Geçersiz process."); return; }
+                
+                Process process;
+                try { process = Process.GetProcessById(item.Process.Id); }
+                catch { MessageBox.Show("Process çalışmıyor. Yenileyin."); return; }
+
+                IntPtr hProcess = OpenProcess(PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION | PROCESS_WM_READ, false, process.Id);
+                if (hProcess == IntPtr.Zero) { AppendLog($"OpenProcess write fail Err={Marshal.GetLastWin32Error()}"); MessageBox.Show("Process açılamadı."); return; }
+
+                try
+                {
+                    MEMORY_BASIC_INFORMATION mbi;
+                    var res = VirtualQueryEx(hProcess, fa.Address, out mbi, (UIntPtr)Marshal.SizeOf(typeof(MEMORY_BASIC_INFORMATION)));
+                    if (res == UIntPtr.Zero) { AppendLog("VirtualQueryEx fail for write"); MessageBox.Show("Bellek sorgulanamadı."); return; }
+                    
+                    bool isCommitted = (mbi.State & MEM_COMMIT) != 0;
+                    bool noAccess = (mbi.Protect & PAGE_NOACCESS) != 0;
+                    bool guard = (mbi.Protect & PAGE_GUARD) != 0;
+                    uint prot = mbi.Protect;
+                    bool writable = ((prot & PAGE_READWRITE) != 0) || ((prot & PAGE_WRITECOPY) != 0) || ((prot & PAGE_EXECUTE_READWRITE) != 0) || ((prot & PAGE_EXECUTE_WRITECOPY) != 0);
+                    
+                    if (!isCommitted || noAccess || guard || !writable)
+                    {
+                        AppendLog($"Region not writable at 0x{fa.Address.ToString("X")}: Protect=0x{prot:X}");
+                        MessageBox.Show("Bu adres yazılabilir değil.");
+                        return;
+                    }
+                    
+                    IntPtr written;
+                    bool ok = WriteProcessMemory(hProcess, fa.Address, bytes, bytes.Length, out written);
+                    if (ok) { AppendLog($"Wrote {written.ToInt32()} bytes to 0x{fa.Address.ToString("X")}"); AddResult($"0x{fa.Address.ToString("X")} - Yazıldı"); MessageBox.Show("Başarıyla yazıldı!"); }
+                    else { int errc = Marshal.GetLastWin32Error(); AppendLog($"Write fail at 0x{fa.Address.ToString("X")} Err={errc}"); MessageBox.Show("Yazma başarısız: Err=" + errc); }
+                }
+                finally { CloseHandle(hProcess); }
+            }
+            catch (Exception ex) { AppendLog("ApplyAddressValue: " + ex.Message); MessageBox.Show("Hata: " + ex.Message); }
+        }
+
+        // Thread-safe UI helpers
+        private void AppendLog(string text)
+        {
+            try
+            {
+                string line = $"[{DateTime.Now:HH:mm:ss}] {text}" + Environment.NewLine;
+                if (txtLog == null || txtLog.IsDisposed) return;
+                _logQueue.Enqueue(line);
+            }
+            catch { }
+        }
+
+        private void FlushUiQueues()
+        {
+            try
+            {
+                // Flush logs
+                if (!_logQueue.IsEmpty && txtLog != null && !txtLog.IsDisposed && txtLog.IsHandleCreated)
+                {
+                    var sb = new StringBuilder();
+                    while (_logQueue.TryDequeue(out var ln)) sb.Append(ln);
+                    if (sb.Length > 0)
+                    {
+                        try { txtLog.Invoke((Action)(() => txtLog.AppendText(sb.ToString()))); } catch { }
+                        // Also append the same text to the import tab log if present
+                        try { if (txtLogUpload != null && !txtLogUpload.IsDisposed && txtLogUpload.IsHandleCreated) txtLogUpload.Invoke((Action)(() => txtLogUpload.AppendText(sb.ToString()))); } catch { }
+                    }
+                }
+
+                // Handle clear results request
+                if (_clearResultsRequested && lstResults != null && !lstResults.IsDisposed && lstResults.IsHandleCreated)
+                {
+                    try { lstResults.Invoke((Action)(() => lstResults.Items.Clear())); } catch { }
+                    _clearResultsRequested = false;
+                }
+
+                // Flush results
+                if (!_resultQueue.IsEmpty && lstResults != null && !lstResults.IsDisposed && lstResults.IsHandleCreated)
+                {
+                    var items = new List<string>();
+                    while (_resultQueue.TryDequeue(out var r)) items.Add(r);
+                    if (items.Count > 0)
+                    {
+                        try { lstResults.Invoke((Action)(() => { foreach (var it in items) lstResults.Items.Add(it); })); } catch { }
+                    }
+                }
+
+                // Latest status
+                if (_latestStatus != null && lblStatus != null && !lblStatus.IsDisposed && lblStatus.IsHandleCreated)
+                {
+                    var s = Interlocked.Exchange(ref _latestStatus, null);
+                    if (s != null)
+                    {
+                        try { lblStatus.Invoke((Action)(() => lblStatus.Text = s)); } catch { }
+                        // Also set the same status text on the import tab status label if present
+                        try { if (lblStatusUpload != null && !lblStatusUpload.IsDisposed && lblStatusUpload.IsHandleCreated) lblStatusUpload.Invoke((Action)(() => lblStatusUpload.Text = s)); } catch { }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private EnqueueResult(string text) => _resultQueue.Enqueue(text);
+
+        private void AddResult(string text)
+        {
+            try
+            {
+                if (lstResults == null || lstResults.IsDisposed || !lstResults.IsHandleCreated)
+                {
+                    _resultQueue.Enqueue(text);
+                    return;
+                }
+                _resultQueue.Enqueue(text);
+            }
+            catch { }
+        }
+
+        private void AddStatus(string text)
+        {
+            try { Interlocked.Exchange(ref _latestStatus, text); } catch { }
+        }
+
+        private void ClearResults() { try { _clearResultsRequested = true; } catch { } }
+
+        // Export found addresses to file
+        private void ExportFoundAddressesToFile()
+        {
+            try
+            {
+                var snapshot = lastFoundAddresses.ToList();
+                if (!snapshot.Any()) { MessageBox.Show("Kaydedilecek adres yok."); return; }
+                
+                // Her adres için kullanıcıdan isim al
+                var addressesWithNames = new List<(FoundAddress addr, string name)>();
+                foreach (var fa in snapshot)
+                {
+                    string defaultName = $"Address_{fa.Address.ToString("X")}";
+                    string userName = Microsoft.VisualBasic.Interaction.InputBox(
+                        $"Adres 0x{fa.Address.ToString("X")} ({fa.Subtype}) için bir isim girin:",
+                        "Adres İsmi",
+                        defaultName
+                    );
+                    
+                    if (string.IsNullOrWhiteSpace(userName))
+                        userName = defaultName;
+                    
+                    fa.Name = userName;
+                    addressesWithNames.Add((fa, userName));
+                }
+                
+                var lines = new List<string>();
+                foreach (var item in addressesWithNames)
+                {
+                    string addr = $"0x{item.addr.Address.ToString("X")}";
+                    string shortType = MapSubtypeToShort(item.addr.Subtype);
+                    string name = item.name.Replace("\"", "\\\""); // Quote'ları escape et
+                    lines.Add($"{addr} {shortType} \"{name}\"");
+                }
+                
+                string path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "found_addresses.txt");
+                File.WriteAllLines(path, lines, Encoding.UTF8);
+                AddStatus($"Adresler dosyaya yazıldı: {path}");
+                AppendLog($"Exported {lines.Count} addresses to {path}");
+                MessageBox.Show("Adresler dışa aktarıldı:\n" + path);
+            }
+            catch (Exception ex) { AddStatus("Dışa aktarma hatası: " + ex.Message); AppendLog("Export error: " + ex.Message); }
+        }
+
+        private string MapSubtypeToShort(string subtype)
+        {
+            switch (subtype)
+            {
+                case "Int8": return "int8";
+                case "UInt8": return "uint8";
+                case "Int16": return "int16";
+                case "UInt16": return "uint16";
+                case "Int32": return "int32";
+                case "UInt32": return "uint32";
+                case "Int64": return "int64";
+                case "UInt64": return "uint64";
+                case "Float32": return "float";
+                case "Float64": return "double";
+                case "Bytes (Hex)": return "bytes";
+                default: return subtype;
+            }
+        }
+
+        // Designer-export button handler (wired in Designer)
+        private void btnExport_Click(object sender, EventArgs e)
+        {
+            try { ExportFoundAddressesToFile(); } catch (Exception ex) { AppendLog("btnExport_Click error: " + ex.Message); }
+        }
+
+        // Handler to load current lastFoundAddresses into the flow panel (wired in Designer)
+        private void btnLoadAddresses_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (flpAddressesUpload == null || flpAddressesUpload.IsDisposed) return;
+                flpAddressesUpload.Controls.Clear();
+                var snapshot = lastFoundAddresses.ToList();
+                foreach (var fa in snapshot) CreateAddressRow(fa);
+            }
+            catch (Exception ex) { AppendLog("btnLoadAddresses_Click error: " + ex.Message); }
+        }
+
+        // Handler for process combobox selection change (no-op - single combobox used)
+        private void cbProcesses_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            // no action required when using single process combobox
+        }
+
+        // Thread-safe helper classes
+        class ProcessItem
+        {
+            public Process Process { get; set; }
+            public string Display { get; set; }
+            public override string ToString() { return Display; }
+        }
+
+        class FoundAddress
+        {
+            public IntPtr Address { get; set; }
+            public string Subtype { get; set; }
+            public byte[] Value { get; set; }
+            public string Name { get; set; } // Kullanıcı tanımlı isim
+        }
+
+        private void lblStatus_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void tabScan_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblWriteValue_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void progressBarScan_Click(object sender, EventArgs e)
+        {
+
+        }
+
+        private void lblValue_Click(object sender, EventArgs e)
+        {
+
+        }
+    }
+}
