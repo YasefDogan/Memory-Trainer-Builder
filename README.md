@@ -37,7 +37,7 @@ Windows oyunları için geliştirilmiş profesyonel bellek düzenleme aracı. Te
 ### Seçenek 2: Kaynak Koddan
 ```bash
 # 1. Projeyi klonlayın
-git clone https://github.com/yourusername/memory-scanner.git
+git clone https://github.com/YasefDogan/Memory-Trainer-Builde
 cd memory-scanner
 
 # 2. Visual Studio ile açın
